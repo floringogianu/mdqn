@@ -152,7 +152,7 @@ def policy_iteration(
             batch = experience_replay.sample()
             policy_improvement(batch)
 
-            if step_cnt % 1000 == 0:
+            if step_cnt % opt.target_update == 0:
                 policy_improvement.update_target_estimator()
 
         state = state_
@@ -209,7 +209,7 @@ def run(opt):
     policy_improvement = DQNPolicyImprovement(
         estimator,
         optim.Adam(estimator.parameters(), lr=opt.lr, eps=1e-4),
-        0.95,
+        opt.gamma,
         # is_double=True,
     )
 
