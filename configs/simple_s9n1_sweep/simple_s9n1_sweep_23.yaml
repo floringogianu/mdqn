@@ -1,0 +1,11 @@
+_experiment_parameters:
+  epsilon_steps: 100000
+  gamma: 0.99
+  lr: 0.0001
+  target_update: 10000
+cfg_id: 23
+epsilon_steps: 100000
+gamma: 0.99
+lr: 0.0001
+target_update: 10000
+title: gamma=0.99; target_update=10000; lr=0.0001; epsilon_steps=100000
