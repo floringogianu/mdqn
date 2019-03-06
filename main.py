@@ -1,9 +1,7 @@
 """ MiniGrid DQN
 """
 import random
-import time
 from copy import deepcopy
-from types import SimpleNamespace
 
 import torch
 from torch import nn
@@ -13,6 +11,7 @@ from wintermute.policy_evaluation import EpsilonGreedyPolicy
 from wintermute.policy_improvement import DQNPolicyImprovement
 from wintermute.replay import MemoryEfficientExperienceReplay
 from wintermute.env_wrappers import FrameStack
+from rl_logger import Logger
 
 from liftoff.config import read_config, config_to_string
 
@@ -77,7 +76,7 @@ class TorchWrapper(gym.ObservationWrapper):
         return obs.to(self.device)
 
 
-def test(opt, estimator):
+def test(opt, estimator, crt_step):
 
     env = wrap_env(gym.make(opt.game), opt)
     policy_evaluation = EpsilonGreedyPolicy(
@@ -85,10 +84,14 @@ def test(opt, estimator):
         env.action_space.n,
         epsilon={"name": "constant", "start": 0.01},
     )
+    test_log = opt.log.groups["test"]
+    test_log.reset()  # required for proper timing
+    opt.log.log_info(
+        test_log, f"Start evaluation at {crt_step} training steps."
+    )
 
-    done, ep_cnt, mean_rw, mean_steps = True, 1, [], []
+    done = True
 
-    start = time.time()
     for step_cnt in range(1, opt.test_steps + 1):
 
         if done:
@@ -100,40 +103,36 @@ def test(opt, estimator):
             ep_rw, ep_steps = 0, 0
 
         with torch.no_grad():
-            action = policy_evaluation(state).action
+            pi = policy_evaluation(state)
 
-        state_, reward, done, _ = env.step(action)
+        state_, reward, done, _ = env.step(pi.action)
         state = state_.clone()
         # env.render()
 
         ep_rw += reward
         ep_steps += 1
-
-        if done:
-            ep_cnt += 1
-            mean_rw.append(ep_rw)
-            mean_steps.append(ep_steps)
+        test_log.update(
+            ep_cnt=(1 if done else 0),
+            rw_per_ep=(reward, (1 if done else 0)),
+            step_per_ep=(1, (1 if done else 0)),
+            max_q=pi.q_value,
+            test_fps=1,
+        )
 
     env.close()
 
-    fps = sum(mean_steps) / (time.time() - start)
-    mean_rw_ = torch.tensor(mean_rw).float().mean().item()
-    mean_steps_ = torch.tensor(mean_steps).float().mean().item()
-    print(
-        f"eval on results: avg. rw={mean_rw_:2.2f} in"
-        f" {ep_cnt:3d}eps / {step_cnt:6d}steps."
-        f"  |  avg. ep_steps={mean_steps_:6.2f}"
-        f"  |  fps={fps:3.2f}"
-    )
+    # do some logging
+    opt.log.log(test_log, step_cnt)
+    test_log.reset()
 
 
 def policy_iteration(
     env, policy_evaluation, policy_improvement, experience_replay, opt
 ):
 
-    done, ep_cnt, mean_rw, mean_steps = True, 1, [], []
+    train_log = opt.log.groups["train"]
+    done, ep_cnt = True, 1
 
-    start = time.time()
     for step_cnt in range(0, opt.train_steps + 1):
 
         if done:
@@ -142,13 +141,12 @@ def policy_iteration(
             elif opt.subset:
                 env.seed(random.choice(opt.subset))
             state, done = env.reset(), False
-            ep_rw, ep_steps = 0, 0
 
         with torch.no_grad():
-            action = policy_evaluation(state).action
-        state_, reward, done, _ = env.step(action)
+            pi = policy_evaluation(state)
+        state_, reward, done, _ = env.step(pi.action)
 
-        experience_replay.push((state, action, reward, state_, done))
+        experience_replay.push((state, pi.action, reward, state_, done))
 
         if step_cnt > 512:
             batch = experience_replay.sample()
@@ -160,35 +158,29 @@ def policy_iteration(
         state = state_
         # env.render()
 
-        ep_rw += reward
-        ep_steps += 1
+        train_log.update(
+            ep_cnt=(1 if done else 0),
+            rw_per_ep=(reward, (1 if done else 0)),
+            step_per_ep=(1, (1 if done else 0)),
+            max_q=pi.q_value,
+            train_fps=1,
+        )
 
         if done:
             ep_cnt += 1
-            mean_rw.append(ep_rw)
-            mean_steps.append(ep_steps)
             if ep_cnt % 25 == 0:
-                fps = sum(mean_steps) / (time.time() - start)
-                mean_rw_ = torch.tensor(mean_rw).float().mean().item()
-                mean_steps_ = torch.tensor(mean_steps).float().mean().item()
-                print(
-                    f"[{ep_cnt:3d}, {step_cnt:6d}]"
-                    f"  |  avg. rw={mean_rw_:2.2f}"
-                    f"  |  avg. ep_steps={mean_steps_:6.2f}"
-                    f"  |  fps={fps:3.2f}"
-                )
-                mean_rw.clear()
-                mean_steps.clear()
-                start = time.time()
+                opt.log.log(train_log, step_cnt)
+                train_log.reset()
 
         if step_cnt % 50000 == 0 and step_cnt != 0:
-            test(opt, deepcopy(policy_evaluation.policy.estimator))
+            test(opt, deepcopy(policy_evaluation.policy.estimator), step_cnt)
 
 
 def wrap_env(env, opt):
     env = ImgObsWrapper(env)
     env = TorchWrapper(env, device=opt.device)
     return env
+
 
 def run(opt):
 
@@ -227,6 +219,31 @@ def run(opt):
         hist_len=opt.hist_len,
         async_memory=False,
     )
+
+    log = Logger(label=opt.experiment, path=opt.out_dir)
+    log.add_group(
+        tag="train",
+        metrics=(
+            log.SumMetric("ep_cnt"),
+            log.AvgMetric("step_per_ep"),
+            log.EpisodicMetric("rw_per_ep", emph=True),
+            log.MaxMetric("max_q"),
+            log.FPSMetric("train_fps"),
+        ),
+        console_options=("white", "on_blue", ["bold"]),
+    )
+    log.add_group(
+        tag="test",
+        metrics=(
+            log.SumMetric("ep_cnt"),
+            log.EpisodicMetric("rw_per_ep", emph=True),
+            log.AvgMetric("step_per_ep"),
+            log.MaxMetric("max_q"),
+            log.FPSMetric("test_fps"),
+        ),
+        console_options=("white", "on_magenta", ["bold"]),
+    )
+    opt.log = log
 
     policy_iteration(
         env, policy_evaluation, policy_improvement, experience_replay, opt
