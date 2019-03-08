@@ -21,6 +21,18 @@ import gym_minigrid
 from gym_minigrid.wrappers import ImgObsWrapper
 
 
+def init_weights(module):
+    """ Callback for resetting a module's weights to Xavier Uniform and
+        biases to zero.
+    """
+    if isinstance(module, nn.Linear):
+        nn.init.xavier_uniform_(module.weight)
+        module.bias.data.zero_()
+    elif isinstance(module, nn.Conv2d):
+        nn.init.xavier_uniform_(module.weight)
+        module.bias.data.zero_()
+
+
 class MiniGridNet(nn.Module):
     def __init__(self, in_channels, action_no, hidden_size=64):
         super(MiniGridNet, self).__init__()
@@ -39,6 +51,7 @@ class MiniGridNet(nn.Module):
             nn.ReLU(inplace=True),
             nn.Linear(hidden_size, action_no),
         )
+        self.reset_parameters()
 
     def forward(self, x):
         assert (
@@ -51,6 +64,12 @@ class MiniGridNet(nn.Module):
         x = x.view(x.size(0), -1)
         x = self.head(x)
         return x
+    
+    def reset_parameters(self):
+        """ Reinitializez parameters to Xavier Uniform for all layers and
+            0 bias.
+        """
+        self.apply(init_weights)
 
 
 class TorchWrapper(gym.ObservationWrapper):
@@ -68,9 +87,14 @@ class TorchWrapper(gym.ObservationWrapper):
         """ Convert from numpy to torch.
             Also change from (h, w, c*hist) to (batch, hist*c, h, w)
         """
-        # (hist, w, h, ch) -> (hit, ch, w, h)
         # obs = torch.from_numpy(obs).permute(0, 3, 1, 2).unsqueeze(0)
-        obs = torch.from_numpy(obs).permute(2, 1, 0).unsqueeze(0).unsqueeze(0)
+        obs = torch.from_numpy(obs)
+        obs = obs.permute(2, 1, 0)
+
+        # [hist_len * channels, w, h] -> [1, hist_len, channels, w, h]
+        # we are always using RGB
+        obs = obs.view(int(obs.shape[0] / 3), 3, 7, 7).unsqueeze(0)
+
         # scale the symbolic representention from [0,9] to [0, 255]
         obs = obs.mul_(self.max_ratio).byte()
         return obs.to(self.device)
@@ -178,6 +202,7 @@ def policy_iteration(
 
 def wrap_env(env, opt):
     env = ImgObsWrapper(env)
+    env = FrameStack(env, k=opt.hist_len)
     env = TorchWrapper(env, device=opt.device)
     return env
 
