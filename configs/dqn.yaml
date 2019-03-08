@@ -10,6 +10,8 @@ batch_size: 32
 hist_len: 1
 
 lr: 0.001
+gamma: 0.95
+target_update: 1000
 
 epsilon_steps: 100_000
 device: cuda
