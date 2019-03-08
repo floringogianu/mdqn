@@ -1,0 +1,9 @@
+_experiment_parameters:
+  lin_size: 256
+  mem_size: 100000
+  target_update: 500
+cfg_id: 8
+lin_size: 256
+mem_size: 100000
+target_update: 500
+title: mem_size=100000; target_update=500; lin_size=256

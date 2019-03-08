@@ -148,7 +148,7 @@ def policy_iteration(
 
         experience_replay.push((state, pi.action, reward, state_, done))
 
-        if step_cnt > 512:
+        if step_cnt > 10000:
             batch = experience_replay.sample()
             policy_improvement(batch)
 
@@ -193,7 +193,7 @@ def run(opt):
     env = wrap_env(gym.make(opt.game), opt)
 
     estimator = MiniGridNet(
-        opt.hist_len * 3, env.action_space.n, hidden_size=64
+        opt.hist_len * 3, env.action_space.n, hidden_size=opt.lin_size
     ).cuda()
     policy_evaluation = EpsilonGreedyPolicy(
         estimator,
