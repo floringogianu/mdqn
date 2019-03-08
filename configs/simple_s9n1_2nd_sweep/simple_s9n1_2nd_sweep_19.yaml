@@ -1,0 +1,11 @@
+_experiment_parameters:
+  hist_len: 1
+  lin_size: 128
+  mem_size: 200000
+  target_update: 100
+cfg_id: 19
+hist_len: 1
+lin_size: 128
+mem_size: 200000
+target_update: 100
+title: hist_len=1; mem_size=200000; target_update=100; lin_size=128
