@@ -193,7 +193,7 @@ def run(opt):
     env = wrap_env(gym.make(opt.game), opt)
 
     estimator = MiniGridNet(
-        opt.hist_len * 3, env.action_space.n, hidden_size=64
+        opt.hist_len * 3, env.action_space.n, hidden_size=opt.lin_size
     ).cuda()
     policy_evaluation = EpsilonGreedyPolicy(
         estimator,
