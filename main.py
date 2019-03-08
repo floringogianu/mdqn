@@ -122,7 +122,7 @@ def test(opt, estimator, crt_step):
     env.close()
 
     # do some logging
-    opt.log.log(test_log, crt_step)
+    opt.log.log(test_log, step_cnt)
     test_log.reset()
 
 
@@ -148,7 +148,7 @@ def policy_iteration(
 
         experience_replay.push((state, pi.action, reward, state_, done))
 
-        if step_cnt > 512:
+        if step_cnt > 10000:
             batch = experience_replay.sample()
             policy_improvement(batch)
 
