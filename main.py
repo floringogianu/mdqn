@@ -122,7 +122,7 @@ def test(opt, estimator, crt_step):
     env.close()
 
     # do some logging
-    opt.log.log(test_log, step_cnt)
+    opt.log.log(test_log, crt_step)
     test_log.reset()
 
 
