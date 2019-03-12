@@ -192,7 +192,7 @@ def policy_iteration(
 
         if done:
             ep_cnt += 1
-            if ep_cnt % 25 == 0:
+            if ep_cnt % 100 == 0:
                 opt.log.log(train_log, step_cnt)
                 train_log.reset()
 
