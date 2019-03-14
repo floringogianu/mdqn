@@ -173,8 +173,9 @@ def policy_iteration(
         experience_replay.push((state, pi.action, reward, state_, done))
 
         if step_cnt > 10000:
-            batch = experience_replay.sample()
-            policy_improvement(batch)
+            if step_cnt % opt.update_freq == 0:
+                batch = experience_replay.sample()
+                policy_improvement(batch)
 
             if step_cnt % opt.target_update == 0:
                 policy_improvement.update_target_estimator()
