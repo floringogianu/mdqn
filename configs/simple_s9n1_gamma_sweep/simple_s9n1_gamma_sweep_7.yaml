@@ -1,0 +1,9 @@
+_experiment_parameters:
+  gamma: 0.95
+  hist_len: 4
+  lin_size: 256
+cfg_id: 7
+gamma: 0.95
+hist_len: 4
+lin_size: 256
+title: gamma=0.95; hist_len=4; lin_size=256
