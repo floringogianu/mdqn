@@ -1,0 +1,19 @@
+game: "MiniGrid-SimpleCrossingS9N1-v0"
+seed: 0  # this has precedence over subset
+subset: 0  # 0 (false) or no of mazes used
+
+train_steps: 1_000_000
+test_steps: 50000
+
+lin_size: 128
+
+mem_size: 100_000
+batch_size: 32
+hist_len: 3
+
+lr: 0.001
+epsilon_steps: 100_000
+gamma: 0.95
+target_update: 1000
+
+device: cuda

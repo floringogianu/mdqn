@@ -1,0 +1,7 @@
+_experiment_parameters:
+  gamma: 0.92
+  target_update: 4000
+cfg_id: 26
+gamma: 0.92
+target_update: 4000
+title: target_update=4000; gamma=0.92
