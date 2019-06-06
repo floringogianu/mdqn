@@ -3,22 +3,19 @@
 import random
 from copy import deepcopy
 
+import gym
+import gym_minigrid  # pylint: disable=unused-import
 import torch
-from torch import nn
-from torch import optim
+from gym_minigrid.wrappers import ImgObsWrapper
+from torch import nn, optim
 
+from liftoff import parse_opts
+from rl_logger import Logger
+from wintermute.env_wrappers import FrameStack
 from wintermute.policy_evaluation import EpsilonGreedyPolicy
 from wintermute.policy_improvement import DQNPolicyImprovement
 from wintermute.replay import MemoryEfficientExperienceReplay
-from wintermute.env_wrappers import FrameStack
-from rl_logger import Logger
-
-from liftoff.config import read_config, config_to_string
-
-import gym
-from gym import spaces
-import gym_minigrid
-from gym_minigrid.wrappers import ImgObsWrapper
+from src.utils import config_to_string
 
 
 def init_weights(module):
@@ -64,7 +61,7 @@ class MiniGridNet(nn.Module):
         x = x.view(x.size(0), -1)
         x = self.head(x)
         return x
-    
+
     def reset_parameters(self):
         """ Reinitializez parameters to Xavier Uniform for all layers and
             0 bias.
@@ -116,7 +113,7 @@ def test(opt, estimator, crt_step):
 
     done = True
 
-    for step_cnt in range(1, opt.test_steps + 1):
+    for _ in range(1, opt.test_steps + 1):
 
         if done:
             if opt.seed:
@@ -131,7 +128,7 @@ def test(opt, estimator, crt_step):
 
         state_, reward, done, _ = env.step(pi.action)
         state = state_.clone()
-        # env.render()
+        env.render()
 
         ep_rw += reward
         ep_steps += 1
@@ -208,12 +205,18 @@ def wrap_env(env, opt):
     return env
 
 
-def run(opt):
-
+def augment_options(opt):
+    if "experiment" not in opt.__dict__:
+        opt.experiment = f"{opt.game.split('-')[1]}-DQN"
     if opt.subset:
         opt.subset = [random.randint(0, 10000) for _ in range(opt.subset)]
     opt.device = torch.device(opt.device)
     print(config_to_string(opt))
+    return opt
+
+
+def run(opt):
+    opt = augment_options(opt)
 
     # start configuring some objects
     env = wrap_env(gym.make(opt.game), opt)
@@ -278,7 +281,7 @@ def run(opt):
 
 def main():
     # read config files using liftoff
-    opt = read_config()
+    opt = parse_opts()
 
     run(opt)
 
