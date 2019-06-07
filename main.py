@@ -43,6 +43,8 @@ def test(opt, estimator, crt_step):
             _, _, reward, _, done = transition
             test_log.put(reward=reward, done=done, frame_no=1, qval=pi.q_value)
             step_cnt += 1
+            if opt.test_render:
+                env.render()
     env.close()
 
     # do some logging

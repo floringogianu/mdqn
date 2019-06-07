@@ -5,6 +5,7 @@ seed: r5
 
 train_steps: 2_000_000
 test_steps: 30000
+test_render: no
 
 lr: 0.001
 gamma: 0.92
