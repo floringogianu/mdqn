@@ -21,9 +21,12 @@ from src.utils import (
     configure_logger,
     wrap_env,
 )
+from src.rl_routines import Episode, DQNPolicy
 
 
 def test(opt, estimator, crt_step):
+    """ Test the agent's performance.
+    """
     env = wrap_env(gym.make(opt.game), opt)
     policy_evaluation = EpsilonGreedyPolicy(
         estimator,
@@ -35,14 +38,9 @@ def test(opt, estimator, crt_step):
     test_log.reset()  # required for proper timing
 
     done = True
-
     for _ in range(1, opt.test_steps + 1):
 
         if done:
-            if opt.seed:
-                env.seed(opt.seed)
-            elif opt.subset:
-                env.seed(random.choice(opt.subset))
             state, done = env.reset(), False
 
         with torch.no_grad():
@@ -50,7 +48,7 @@ def test(opt, estimator, crt_step):
 
         state_, reward, done, _ = env.step(pi.action)
         state = state_.clone()
-        env.render()
+        # env.render()
 
         test_log.put(reward=reward, done=done, frame_no=1, qval=pi.q_value)
 
@@ -68,59 +66,52 @@ def test(opt, estimator, crt_step):
     test_log.trace(step=crt_step, **summary)
 
 
-def policy_iteration(
-    env, policy_evaluation, policy_improvement, experience_replay, opt
-):
+def policy_iteration(env, policy, opt):
+    """ Policy improvement routine.
+
+    Args:
+        env (gym.env): The game we are training on.
+        policy (DQNPolicy): A DQN agent.
+        opt (Namespace): Configuration values.
+    """
 
     train_log = rlog.getLogger(f"{opt.experiment}.train")
-    done, ep_cnt = True, 1
 
-    for step_cnt in range(0, opt.train_steps + 1):
+    print(env)
 
-        if done:
-            if opt.seed:
-                env.seed(opt.seed)
-            elif opt.subset:
-                env.seed(random.choice(opt.subset))
-            state, done = env.reset(), False
+    while policy.steps < opt.train_steps:
+        for _state, _action, reward, state, done in Episode(env, policy):
 
-        with torch.no_grad():
-            pi = policy_evaluation(state)
-        state_, reward, done, _ = env.step(pi.action)
+            # push to memory
+            policy.push((_state, _action, reward, state, done))
 
-        experience_replay.push((state, pi.action, reward, state_, done))
+            # learn
+            if policy.steps >= 10_000:
+                if policy.steps % opt.update_freq == 0:
+                    policy.learn()
 
-        if step_cnt > 10000:
-            if step_cnt % opt.update_freq == 0:
-                batch = experience_replay.sample()
-                policy_improvement(batch)
+                if policy.steps % opt.target_update == 0:
+                    policy.policy_improvement.update_target_estimator()
 
-            if step_cnt % opt.target_update == 0:
-                policy_improvement.update_target_estimator()
+            # log
+            train_log.put(
+                reward=reward, done=done, frame_no=opt.batch_size, step_no=1
+            )
 
-        state = state_
-        # env.render()
-
-        train_log.put(
-            reward=reward, done=done, frame_no=opt.batch_size, step_no=1
-        )
-
-        if done:
-            ep_cnt += 1
-            if ep_cnt % 100 == 0:
+            if policy.steps % 10_000 == 0:
                 summary = train_log.summarize()
                 train_log.info(
                     (
                         "[{0:8d}/{ep_cnt:8d}] R/ep={R/ep:6.2f}"
                         + "\n             | steps/ep={steps/ep:6.2f}, "
                         + "fps={learning_fps:8.2f}."
-                    ).format(step_cnt, **summary)
+                    ).format(policy.steps, **summary)
                 )
-                train_log.trace(step=step_cnt, **summary)
+                train_log.trace(step=policy.steps, **summary)
                 train_log.reset()
 
-        if step_cnt % 50000 == 0 and step_cnt != 0:
-            test(opt, deepcopy(policy_evaluation.policy.estimator), step_cnt)
+            if policy.steps % 50000 == 0 and policy.steps != 0:
+                test(opt, deepcopy(policy.estimator), policy.steps)
 
 
 def run(opt):
@@ -134,34 +125,33 @@ def run(opt):
     estimator = MiniGridNet(
         opt.hist_len * 3, env.action_space.n, hidden_size=opt.lin_size
     ).cuda()
-    policy_evaluation = EpsilonGreedyPolicy(
-        estimator,
-        env.action_space.n,
-        epsilon={
-            "name": "linear",
-            "start": 1.0,
-            "end": 0.1,
-            "steps": opt.epsilon_steps,
-        },
+
+    policy = DQNPolicy(
+        EpsilonGreedyPolicy(
+            estimator,
+            env.action_space.n,
+            epsilon={
+                "name": "linear",
+                "start": 1.0,
+                "end": 0.1,
+                "steps": opt.epsilon_steps,
+            },
+        ),
+        DQNPolicyImprovement(
+            estimator,
+            optim.Adam(estimator.parameters(), lr=opt.lr, eps=1e-4),
+            opt.gamma,
+            # is_double=True,
+        ),
+        MemoryEfficientExperienceReplay(
+            capacity=opt.mem_size,
+            batch_size=opt.batch_size,
+            hist_len=opt.hist_len,
+            async_memory=False,
+        ),
     )
 
-    policy_improvement = DQNPolicyImprovement(
-        estimator,
-        optim.Adam(estimator.parameters(), lr=opt.lr, eps=1e-4),
-        opt.gamma,
-        # is_double=True,
-    )
-
-    experience_replay = MemoryEfficientExperienceReplay(
-        capacity=opt.mem_size,
-        batch_size=opt.batch_size,
-        hist_len=opt.hist_len,
-        async_memory=False,
-    )
-
-    policy_iteration(
-        env, policy_evaluation, policy_improvement, experience_replay, opt
-    )
+    policy_iteration(env, policy, opt)
 
 
 def main():

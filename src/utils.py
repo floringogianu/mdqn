@@ -40,18 +40,43 @@ class TorchWrapper(gym.ObservationWrapper):
         return obs.to(self.device)
 
 
+class SeedWrapper(gym.Wrapper):
+    def __init__(self, env, seeds):
+        """ Resets the env with a random seed.
+        
+        Args:
+            seeds ([int, list<int>, None]): Used to set the seed of the env
+            at each reset.
+        """
+        super().__init__(env)
+        self.__seeds = seeds
+    
+    def step(self, action):
+        return self.env.step(action)
+    
+    def reset(self, **kwargs):
+        if isinstance(self.__seeds, list):
+            self.seed(random.choice(self.__seeds))
+        elif isinstance(self.__seeds, int):
+            self.seed(self.__seeds)
+        return self.env.reset(**kwargs)
+
+
 def wrap_env(env, opt):
     env = ImgObsWrapper(env)
     env = FrameStack(env, k=opt.hist_len)
     env = TorchWrapper(env, device=opt.device)
+    env = SeedWrapper(env, opt.seed) if opt.seed is not None else env
     return env
 
 
 def augment_options(opt):
+    """ Adds fields to `opt`. """
     if "experiment" not in opt.__dict__:
         opt.experiment = f"{''.join(opt.game.split('-')[1:-1])}-DQN"
-    if opt.subset:
-        opt.subset = [random.randint(0, 10000) for _ in range(opt.subset)]
+    if isinstance(opt.seed, str):
+        # `opt.seed` is of the form `r10`, `r5`, etc.
+        opt.seed = [random.randint(0, 10000) for _ in range(int(opt.seed[1:]))]
     opt.device = torch.device(opt.device)
     return opt
 

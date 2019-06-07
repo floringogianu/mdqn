@@ -1,6 +1,7 @@
 game: "MiniGrid-Dynamic-Obstacles-Random-6x6-v0"
-seed: 0  # this has precedence over subset
-subset: 5  # 0 (false) or no of mazes used
+# either an int or a number of random seeds, ex.: r10 or r5
+# if seed: null then we train and test on all mdps.
+seed: r5
 
 train_steps: 2_000_000
 test_steps: 30000
