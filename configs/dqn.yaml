@@ -1,6 +1,6 @@
 game: "MiniGrid-Dynamic-Obstacles-Random-6x6-v0"
 seed: 0  # this has precedence over subset
-subset: 5  # 0 (false) or no of mazes used
+subset: false  # 0 (false) or no of mazes used
 
 train_steps: 2_000_000
 test_steps: 30000

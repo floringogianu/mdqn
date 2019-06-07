@@ -6,99 +6,24 @@ from copy import deepcopy
 import gym
 import gym_minigrid  # pylint: disable=unused-import
 import torch
-from gym_minigrid.wrappers import ImgObsWrapper
-from torch import nn, optim
+from torch import optim
 
 import rlog
 from liftoff import parse_opts
-from src.utils import config_to_string
-from wintermute.env_wrappers import FrameStack
 from wintermute.policy_evaluation import EpsilonGreedyPolicy
 from wintermute.policy_improvement import DQNPolicyImprovement
 from wintermute.replay import MemoryEfficientExperienceReplay
 
-
-def init_weights(module):
-    """ Callback for resetting a module's weights to Xavier Uniform and
-        biases to zero.
-    """
-    if isinstance(module, nn.Linear):
-        nn.init.xavier_uniform_(module.weight)
-        module.bias.data.zero_()
-    elif isinstance(module, nn.Conv2d):
-        nn.init.xavier_uniform_(module.weight)
-        module.bias.data.zero_()
-
-
-class MiniGridNet(nn.Module):
-    def __init__(self, in_channels, action_no, hidden_size=64):
-        super(MiniGridNet, self).__init__()
-        self.in_channels = in_channels
-
-        self.features = nn.Sequential(
-            nn.Conv2d(in_channels, 16, kernel_size=3),
-            nn.ReLU(inplace=True),
-            nn.Conv2d(16, 16, kernel_size=2),
-            nn.ReLU(inplace=True),
-            nn.Conv2d(16, 16, kernel_size=2),
-            nn.ReLU(inplace=True),
-        )
-        self.head = nn.Sequential(
-            nn.Linear(144, hidden_size),
-            nn.ReLU(inplace=True),
-            nn.Linear(hidden_size, action_no),
-        )
-        self.reset_parameters()
-
-    def forward(self, x):
-        assert (
-            x.dtype == torch.uint8
-        ), "The model expects states of type ByteTensor"
-        x = x.float().div_(255)
-        if x.ndimension() == 5:
-            x = x.view(x.shape[0], x.shape[1] * x.shape[2], 7, 7)
-        x = self.features(x)
-        x = x.view(x.size(0), -1)
-        x = self.head(x)
-        return x
-
-    def reset_parameters(self):
-        """ Reinitializez parameters to Xavier Uniform for all layers and
-            0 bias.
-        """
-        self.apply(init_weights)
-
-
-class TorchWrapper(gym.ObservationWrapper):
-    """ From numpy to torch. """
-
-    def __init__(self, env, device, verbose=False):
-        super().__init__(env)
-        self.device = device
-        self.max_ratio = int(255 / 9)
-
-        if verbose:
-            print("[Torch Wrapper] for returning PyTorch Tensors.")
-
-    def observation(self, obs):
-        """ Convert from numpy to torch.
-            Also change from (h, w, c*hist) to (batch, hist*c, h, w)
-        """
-        # obs = torch.from_numpy(obs).permute(0, 3, 1, 2).unsqueeze(0)
-        obs = torch.from_numpy(obs)
-        obs = obs.permute(2, 1, 0)
-
-        # [hist_len * channels, w, h] -> [1, hist_len, channels, w, h]
-        # we are always using RGB
-        obs = obs.view(int(obs.shape[0] / 3), 3, 7, 7).unsqueeze(0)
-
-        # scale the symbolic representention from [0,9] to [0, 255]
-        obs = obs.mul_(self.max_ratio).byte()
-        return obs.to(self.device)
+from src.models import MiniGridNet
+from src.utils import (
+    augment_options,
+    config_to_string,
+    configure_logger,
+    wrap_env,
+)
 
 
 def test(opt, estimator, crt_step):
-
     env = wrap_env(gym.make(opt.game), opt)
     policy_evaluation = EpsilonGreedyPolicy(
         estimator,
@@ -125,7 +50,7 @@ def test(opt, estimator, crt_step):
 
         state_, reward, done, _ = env.step(pi.action)
         state = state_.clone()
-        env.render()
+        # env.render()
 
         test_log.put(reward=reward, done=done, frame_no=1, qval=pi.q_value)
 
@@ -180,70 +105,29 @@ def policy_iteration(
             reward=reward, done=done, frame_no=opt.batch_size, step_no=1
         )
 
-        if done:
-            ep_cnt += 1
-            if ep_cnt % 100 == 0:
-                summary = train_log.summarize()
-                train_log.info(
-                    (
-                        "[{0:8d}/{ep_cnt:8d}] R/ep={R/ep:6.2f}"
-                        + "\n             | steps/ep={steps/ep:6.2f}, "
-                        + "fps={learning_fps:8.2f}."
-                    ).format(step_cnt, **summary)
-                )
-                train_log.trace(step=step_cnt, **summary)
-                train_log.reset()
+        if step_cnt % 10_000 == 0 and step_cnt != 0:
+            summary = train_log.summarize()
+            train_log.info(
+                (
+                    "[{0:8d}/{ep_cnt:8d}] R/ep={R/ep:6.2f}"
+                    + "\n             | steps/ep={steps/ep:6.2f}, "
+                    + "fps={learning_fps:8.2f}."
+                ).format(step_cnt, **summary)
+            )
+            train_log.trace(step=step_cnt, **summary)
+            train_log.reset()
 
         if step_cnt % 50000 == 0 and step_cnt != 0:
             test(opt, deepcopy(policy_evaluation.policy.estimator), step_cnt)
-
-
-def wrap_env(env, opt):
-    env = ImgObsWrapper(env)
-    env = FrameStack(env, k=opt.hist_len)
-    env = TorchWrapper(env, device=opt.device)
-    return env
-
-
-def augment_options(opt):
-    if "experiment" not in opt.__dict__:
-        opt.experiment = f"{''.join(opt.game.split('-')[1:-1])}-DQN"
-    if opt.subset:
-        opt.subset = [random.randint(0, 10000) for _ in range(opt.subset)]
-    opt.device = torch.device(opt.device)
-    return opt
-
-
-def configure_logger(opt):
-    rlog.init(opt.experiment, path=opt.out_dir)
-    rlog.info(
-        "Starting experiment using the following settings:\n%s",
-        config_to_string(opt),
-    )
-    train_log = rlog.getLogger(opt.experiment + ".train")
-    train_log.addMetrics(
-        [
-            rlog.AvgMetric("R/ep", metargs=["reward", "done"]),
-            rlog.SumMetric("ep_cnt", resetable=False, metargs=["done"]),
-            rlog.AvgMetric("steps/ep", metargs=["step_no", "done"]),
-            rlog.FPSMetric("learning_fps", metargs=["frame_no"]),
-        ]
-    )
-    test_log = rlog.getLogger(opt.experiment + ".test")
-    test_log.addMetrics(
-        [
-            rlog.AvgMetric("R/ep", metargs=["reward", "done"]),
-            rlog.SumMetric("ep_cnt", resetable=False, metargs=["done"]),
-            rlog.AvgMetric("steps/ep", metargs=["frame_no", "done"]),
-            rlog.FPSMetric("test_fps", metargs=["frame_no"]),
-            rlog.MaxMetric("max_q", metargs=["qval"]),
-        ]
-    )
+        
+        if done:
+            ep_cnt += 1
 
 
 def run(opt):
     opt = augment_options(opt)
     configure_logger(opt)
+    rlog.info(config_to_string(opt))
 
     # start configuring some objects
     env = wrap_env(gym.make(opt.game), opt)
