@@ -12,7 +12,7 @@ import rlog
 from liftoff import parse_opts
 from wintermute.policy_evaluation import EpsilonGreedyPolicy
 from wintermute.policy_improvement import DQNPolicyImprovement
-from wintermute.replay import MemoryEfficientExperienceReplay
+from wintermute.replay import ExperienceReplay
 
 from src.models import MiniGridNet
 from src.utils import (
@@ -77,8 +77,6 @@ def policy_iteration(env, policy, opt):
 
     train_log = rlog.getLogger(f"{opt.experiment}.train")
 
-    print(env)
-
     while policy.steps < opt.train_steps:
         for _state, _action, reward, state, done in Episode(env, policy):
 
@@ -95,7 +93,7 @@ def policy_iteration(env, policy, opt):
 
             # log
             train_log.put(
-                reward=reward, done=done, frame_no=opt.batch_size, step_no=1
+                reward=reward, done=done, frame_no=opt.er.batch_size, step_no=1
             )
 
             if policy.steps % 10_000 == 0:
@@ -117,39 +115,30 @@ def policy_iteration(env, policy, opt):
 def run(opt):
     opt = augment_options(opt)
     configure_logger(opt)
-    rlog.info(config_to_string(opt))
+    rlog.info(f"\n{config_to_string(opt)}")
 
     # start configuring some objects
     env = wrap_env(gym.make(opt.game), opt)
 
     estimator = MiniGridNet(
-        opt.hist_len * 3, env.action_space.n, hidden_size=opt.lin_size
+        opt.er.hist_len * 3,
+        env.action_space.n,
+        hidden_size=opt.estimator.lin_size,
     ).cuda()
 
     policy = DQNPolicy(
         EpsilonGreedyPolicy(
-            estimator,
-            env.action_space.n,
-            epsilon={
-                "name": "linear",
-                "start": 1.0,
-                "end": 0.1,
-                "steps": opt.epsilon_steps,
-            },
+            estimator, env.action_space.n, epsilon=opt.exploration.__dict__
         ),
         DQNPolicyImprovement(
             estimator,
             optim.Adam(estimator.parameters(), lr=opt.lr, eps=1e-4),
             opt.gamma,
-            # is_double=True,
+            is_double=opt.double,
         ),
-        MemoryEfficientExperienceReplay(
-            capacity=opt.mem_size,
-            batch_size=opt.batch_size,
-            hist_len=opt.hist_len,
-            async_memory=False,
-        ),
+        ExperienceReplay(**opt.er.__dict__)(),
     )
+    rlog.info(policy)
 
     policy_iteration(env, policy, opt)
 

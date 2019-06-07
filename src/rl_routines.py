@@ -1,6 +1,22 @@
 """ RL primitives.
 """
+from functools import partial
 import torch
+
+
+def priority_update(mem, idxs, weights, dqn_loss, variances=None):
+    """ Callback for updating priorities in the proportional-based experience
+    replay and for computing the importance sampling corrected loss.
+    """
+    losses = dqn_loss.loss
+    with torch.no_grad():
+        td_errors = (dqn_loss.qsa_targets - dqn_loss.qsa).detach().abs()
+
+    if variances:
+        mem.update(idxs, [var.item() for var in variances.detach()])
+        return (losses * weights.to(losses.device).view_as(losses)).mean()
+    mem.update(idxs, [td.item() for td in td_errors])
+    return (losses * weights.to(losses.device).view_as(losses)).mean()
 
 
 class DQNPolicy:
@@ -34,7 +50,16 @@ class DQNPolicy:
     def learn(self):
         """ Learn from a batch of experiences sampled from experience replay.
         """
-        self.policy_improvement(self.experience_replay.sample())
+        batch = self.experience_replay.sample()
+        if len(batch) == 3:
+            # this is a prioritized sampler
+            batch, idxs, weights = batch
+            clbk = partial(
+                priority_update, self.experience_replay, idxs, weights
+            )
+        else:
+            clbk = None
+        self.policy_improvement(batch, cb=clbk)
 
     def push(self, transition):
         """ Push `s,a,r,s_,d` transition in experience replay.
@@ -52,6 +77,13 @@ class DQNPolicy:
         """ Returns reference to the underlying estimator.
         """
         return self.policy_improvement.estimator
+
+    def __str__(self):
+        return "\nDQNPolicy(\n  | {0}\n  | {1}\n  | {2}\n)".format(
+            self.policy_evaluation,
+            self.policy_improvement,
+            self.experience_replay,
+        )
 
 
 class Episode:

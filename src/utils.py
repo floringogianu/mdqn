@@ -64,7 +64,7 @@ class SeedWrapper(gym.Wrapper):
 
 def wrap_env(env, opt):
     env = ImgObsWrapper(env)
-    env = FrameStack(env, k=opt.hist_len)
+    env = FrameStack(env, k=opt.er.hist_len)
     env = TorchWrapper(env, device=opt.device)
     env = SeedWrapper(env, opt.seed) if opt.seed is not None else env
     return env
