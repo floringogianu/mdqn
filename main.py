@@ -1,11 +1,9 @@
 """ MiniGrid DQN
 """
-import random
 from copy import deepcopy
 
 import gym
 import gym_minigrid  # pylint: disable=unused-import
-import torch
 from torch import optim
 
 import rlog
@@ -27,31 +25,24 @@ from src.rl_routines import Episode, DQNPolicy
 def test(opt, estimator, crt_step):
     """ Test the agent's performance.
     """
-    env = wrap_env(gym.make(opt.game), opt)
-    policy_evaluation = EpsilonGreedyPolicy(
-        estimator,
-        env.action_space.n,
-        epsilon={"name": "constant", "start": 0.01},
-    )
     test_log = rlog.getLogger(f"{opt.experiment}.test")
     test_log.info("Test agent after %d training steps.", crt_step)
     test_log.reset()  # required for proper timing
 
-    done = True
-    for _ in range(1, opt.test_steps + 1):
+    # construct env and policy
+    env = wrap_env(gym.make(opt.game), opt)
+    policy = EpsilonGreedyPolicy(
+        estimator,
+        env.action_space.n,
+        epsilon={"name": "constant", "start": 0.01},
+    )
 
-        if done:
-            state, done = env.reset(), False
-
-        with torch.no_grad():
-            pi = policy_evaluation(state)
-
-        state_, reward, done, _ = env.step(pi.action)
-        state = state_.clone()
-        # env.render()
-
-        test_log.put(reward=reward, done=done, frame_no=1, qval=pi.q_value)
-
+    step_cnt = 0
+    while step_cnt < opt.test_steps:
+        for transition, pi in Episode(env, policy, with_pi=True):
+            _, _, reward, _, done = transition
+            test_log.put(reward=reward, done=done, frame_no=1, qval=pi.q_value)
+            step_cnt += 1
     env.close()
 
     # do some logging
@@ -117,7 +108,7 @@ def run(opt):
     configure_logger(opt)
     rlog.info(f"\n{config_to_string(opt)}")
 
-    # start configuring some objects
+    # configure the Environment and the Policy
     env = wrap_env(gym.make(opt.game), opt)
 
     estimator = MiniGridNet(
@@ -140,6 +131,7 @@ def run(opt):
     )
     rlog.info(policy)
 
+    # start training
     policy_iteration(env, policy, opt)
 
 

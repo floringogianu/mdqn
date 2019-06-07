@@ -16,7 +16,7 @@ estimator:
   lin_size: 64
 
 er:
-  # alpha: .95  # when this field is present a PER is built.
+  alpha: .95  # when this field is present a PER is built.
   capacity: 100_000
   batch_size: 32
   hist_len: 3

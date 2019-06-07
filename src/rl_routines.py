@@ -91,9 +91,10 @@ class Episode:
     experience tuples.
     """
 
-    def __init__(self, env, policy):
+    def __init__(self, env, policy, with_pi=False):
         self.env = env
         self.policy = policy
+        self.__with_pi = with_pi
         self.__state, self.__done = self.env.reset(), False
         self.__R = 0
         self.__step_cnt = 0
@@ -111,6 +112,8 @@ class Episode:
 
         self.__R += reward
         self.__step_cnt += 1
+        if self.__with_pi:
+            return (_state, _action, reward, self.__state, self.__done), pi
         return _state, _action, reward, self.__state, self.__done
 
     @property
