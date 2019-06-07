@@ -9,13 +9,13 @@ import torch
 from gym_minigrid.wrappers import ImgObsWrapper
 from torch import nn, optim
 
+import rlog
 from liftoff import parse_opts
-from rl_logger import Logger
+from src.utils import config_to_string
 from wintermute.env_wrappers import FrameStack
 from wintermute.policy_evaluation import EpsilonGreedyPolicy
 from wintermute.policy_improvement import DQNPolicyImprovement
 from wintermute.replay import MemoryEfficientExperienceReplay
-from src.utils import config_to_string
 
 
 def init_weights(module):
@@ -105,11 +105,9 @@ def test(opt, estimator, crt_step):
         env.action_space.n,
         epsilon={"name": "constant", "start": 0.01},
     )
-    test_log = opt.log.groups["test"]
+    test_log = rlog.getLogger(f"{opt.experiment}.test")
+    test_log.info("Test agent after %d training steps.", crt_step)
     test_log.reset()  # required for proper timing
-    opt.log.log_info(
-        test_log, f"Start evaluation at {crt_step} training steps."
-    )
 
     done = True
 
@@ -121,7 +119,6 @@ def test(opt, estimator, crt_step):
             elif opt.subset:
                 env.seed(random.choice(opt.subset))
             state, done = env.reset(), False
-            ep_rw, ep_steps = 0, 0
 
         with torch.no_grad():
             pi = policy_evaluation(state)
@@ -130,28 +127,27 @@ def test(opt, estimator, crt_step):
         state = state_.clone()
         env.render()
 
-        ep_rw += reward
-        ep_steps += 1
-        test_log.update(
-            ep_cnt=(1 if done else 0),
-            rw_per_ep=(reward, (1 if done else 0)),
-            step_per_ep=(1, (1 if done else 0)),
-            max_q=pi.q_value,
-            test_fps=1,
-        )
+        test_log.put(reward=reward, done=done, frame_no=1, qval=pi.q_value)
 
     env.close()
 
     # do some logging
-    opt.log.log(test_log, crt_step)
-    test_log.reset()
+    summary = test_log.summarize()
+    test_log.info(
+        (
+            "[{0:8d}/{ep_cnt:8d}] R/ep={R/ep:6.2f}"
+            + "\n             | steps/ep={steps/ep:6.2f}, "
+            + "fps={test_fps:8.2f}, maxq={max_q:6.2f}."
+        ).format(crt_step, **summary)
+    )
+    test_log.trace(step=crt_step, **summary)
 
 
 def policy_iteration(
     env, policy_evaluation, policy_improvement, experience_replay, opt
 ):
 
-    train_log = opt.log.groups["train"]
+    train_log = rlog.getLogger(f"{opt.experiment}.train")
     done, ep_cnt = True, 1
 
     for step_cnt in range(0, opt.train_steps + 1):
@@ -180,18 +176,22 @@ def policy_iteration(
         state = state_
         # env.render()
 
-        train_log.update(
-            ep_cnt=(1 if done else 0),
-            rw_per_ep=(reward, (1 if done else 0)),
-            step_per_ep=(1, (1 if done else 0)),
-            max_q=pi.q_value,
-            train_fps=1,
+        train_log.put(
+            reward=reward, done=done, frame_no=opt.batch_size, step_no=1
         )
 
         if done:
             ep_cnt += 1
             if ep_cnt % 100 == 0:
-                opt.log.log(train_log, step_cnt)
+                summary = train_log.summarize()
+                train_log.info(
+                    (
+                        "[{0:8d}/{ep_cnt:8d}] R/ep={R/ep:6.2f}"
+                        + "\n             | steps/ep={steps/ep:6.2f}, "
+                        + "fps={learning_fps:8.2f}."
+                    ).format(step_cnt, **summary)
+                )
+                train_log.trace(step=step_cnt, **summary)
                 train_log.reset()
 
         if step_cnt % 50000 == 0 and step_cnt != 0:
@@ -207,16 +207,43 @@ def wrap_env(env, opt):
 
 def augment_options(opt):
     if "experiment" not in opt.__dict__:
-        opt.experiment = f"{opt.game.split('-')[1]}-DQN"
+        opt.experiment = f"{''.join(opt.game.split('-')[1:-1])}-DQN"
     if opt.subset:
         opt.subset = [random.randint(0, 10000) for _ in range(opt.subset)]
     opt.device = torch.device(opt.device)
-    print(config_to_string(opt))
     return opt
+
+
+def configure_logger(opt):
+    rlog.init(opt.experiment, path=opt.out_dir)
+    rlog.info(
+        "Starting experiment using the following settings:\n%s",
+        config_to_string(opt),
+    )
+    train_log = rlog.getLogger(opt.experiment + ".train")
+    train_log.addMetrics(
+        [
+            rlog.AvgMetric("R/ep", metargs=["reward", "done"]),
+            rlog.SumMetric("ep_cnt", resetable=False, metargs=["done"]),
+            rlog.AvgMetric("steps/ep", metargs=["step_no", "done"]),
+            rlog.FPSMetric("learning_fps", metargs=["frame_no"]),
+        ]
+    )
+    test_log = rlog.getLogger(opt.experiment + ".test")
+    test_log.addMetrics(
+        [
+            rlog.AvgMetric("R/ep", metargs=["reward", "done"]),
+            rlog.SumMetric("ep_cnt", resetable=False, metargs=["done"]),
+            rlog.AvgMetric("steps/ep", metargs=["frame_no", "done"]),
+            rlog.FPSMetric("test_fps", metargs=["frame_no"]),
+            rlog.MaxMetric("max_q", metargs=["qval"]),
+        ]
+    )
 
 
 def run(opt):
     opt = augment_options(opt)
+    configure_logger(opt)
 
     # start configuring some objects
     env = wrap_env(gym.make(opt.game), opt)
@@ -249,31 +276,6 @@ def run(opt):
         async_memory=False,
     )
 
-    log = Logger(label=opt.experiment, path=opt.out_dir)
-    log.add_group(
-        tag="train",
-        metrics=(
-            log.SumMetric("ep_cnt"),
-            log.AvgMetric("step_per_ep"),
-            log.EpisodicMetric("rw_per_ep", emph=True),
-            log.MaxMetric("max_q"),
-            log.FPSMetric("train_fps"),
-        ),
-        console_options=("white", "on_blue", ["bold"]),
-    )
-    log.add_group(
-        tag="test",
-        metrics=(
-            log.SumMetric("ep_cnt"),
-            log.EpisodicMetric("rw_per_ep", emph=True),
-            log.AvgMetric("step_per_ep"),
-            log.MaxMetric("max_q"),
-            log.FPSMetric("test_fps"),
-        ),
-        console_options=("white", "on_magenta", ["bold"]),
-    )
-    opt.log = log
-
     policy_iteration(
         env, policy_evaluation, policy_improvement, experience_replay, opt
     )
@@ -282,7 +284,6 @@ def run(opt):
 def main():
     # read config files using liftoff
     opt = parse_opts()
-
     run(opt)
 
 
