@@ -50,10 +50,10 @@ class SeedWrapper(gym.Wrapper):
         """
         super().__init__(env)
         self.__seeds = seeds
-    
+
     def step(self, action):
         return self.env.step(action)
-    
+
     def reset(self, **kwargs):
         if isinstance(self.__seeds, list):
             self.seed(random.choice(self.__seeds))
