@@ -1,0 +1,34 @@
+game: "MiniGrid-SimpleCrossingS9N2-v0"
+# either an int or a number of random seeds, ex.: r10 or r5
+# if seed: null then we train and test on all mdps.
+seed: null
+
+train_steps: 1_000_000
+test_steps: 30000
+test_render: no
+
+lr: 0.001
+gamma: 0.92
+double: True
+update_freq: 4
+target_update: 500
+
+estimator:
+  lin_size: 64
+
+er:
+  alpha: null  # when this field is not null a PER is built.
+  beta: null
+  optim_steps: 475_000  # (train_steps - 100_000) / update_freq
+  capacity: 100_000
+  batch_size: 32
+  hist_len: 3
+  async_memory: no
+
+exploration:
+  name: linear
+  start: 1.0
+  end: 0.1
+  steps: 100_000
+
+device: cuda

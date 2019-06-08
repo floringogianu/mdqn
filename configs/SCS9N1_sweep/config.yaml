@@ -1,0 +1,8 @@
+gamma: [0.92, 0.95]
+er:
+  alpha: [null, .5, .95]
+  beta: [null, 0.2, 0.6]
+
+liftoff:
+  - vars: [er.alpha, er.beta]
+    "->": [[null, null]]
