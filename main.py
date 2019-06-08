@@ -1,285 +1,145 @@
 """ MiniGrid DQN
 """
-import random
 from copy import deepcopy
 
-import torch
-from torch import nn
+import gym
+import gym_minigrid  # pylint: disable=unused-import
 from torch import optim
 
+import rlog
+from liftoff import parse_opts
 from wintermute.policy_evaluation import EpsilonGreedyPolicy
 from wintermute.policy_improvement import DQNPolicyImprovement
-from wintermute.replay import MemoryEfficientExperienceReplay
-from wintermute.env_wrappers import FrameStack
-from rl_logger import Logger
+from wintermute.replay import ExperienceReplay
 
-from liftoff.config import read_config, config_to_string
-
-import gym
-from gym import spaces
-import gym_minigrid
-from gym_minigrid.wrappers import ImgObsWrapper
-
-
-def init_weights(module):
-    """ Callback for resetting a module's weights to Xavier Uniform and
-        biases to zero.
-    """
-    if isinstance(module, nn.Linear):
-        nn.init.xavier_uniform_(module.weight)
-        module.bias.data.zero_()
-    elif isinstance(module, nn.Conv2d):
-        nn.init.xavier_uniform_(module.weight)
-        module.bias.data.zero_()
-
-
-class MiniGridNet(nn.Module):
-    def __init__(self, in_channels, action_no, hidden_size=64):
-        super(MiniGridNet, self).__init__()
-        self.in_channels = in_channels
-
-        self.features = nn.Sequential(
-            nn.Conv2d(in_channels, 16, kernel_size=3),
-            nn.ReLU(inplace=True),
-            nn.Conv2d(16, 16, kernel_size=2),
-            nn.ReLU(inplace=True),
-            nn.Conv2d(16, 16, kernel_size=2),
-            nn.ReLU(inplace=True),
-        )
-        self.head = nn.Sequential(
-            nn.Linear(144, hidden_size),
-            nn.ReLU(inplace=True),
-            nn.Linear(hidden_size, action_no),
-        )
-        self.reset_parameters()
-
-    def forward(self, x):
-        assert (
-            x.dtype == torch.uint8
-        ), "The model expects states of type ByteTensor"
-        x = x.float().div_(255)
-        if x.ndimension() == 5:
-            x = x.view(x.shape[0], x.shape[1] * x.shape[2], 7, 7)
-        x = self.features(x)
-        x = x.view(x.size(0), -1)
-        x = self.head(x)
-        return x
-    
-    def reset_parameters(self):
-        """ Reinitializez parameters to Xavier Uniform for all layers and
-            0 bias.
-        """
-        self.apply(init_weights)
-
-
-class TorchWrapper(gym.ObservationWrapper):
-    """ From numpy to torch. """
-
-    def __init__(self, env, device, verbose=False):
-        super().__init__(env)
-        self.device = device
-        self.max_ratio = int(255 / 9)
-
-        if verbose:
-            print("[Torch Wrapper] for returning PyTorch Tensors.")
-
-    def observation(self, obs):
-        """ Convert from numpy to torch.
-            Also change from (h, w, c*hist) to (batch, hist*c, h, w)
-        """
-        # obs = torch.from_numpy(obs).permute(0, 3, 1, 2).unsqueeze(0)
-        obs = torch.from_numpy(obs)
-        obs = obs.permute(2, 1, 0)
-
-        # [hist_len * channels, w, h] -> [1, hist_len, channels, w, h]
-        # we are always using RGB
-        obs = obs.view(int(obs.shape[0] / 3), 3, 7, 7).unsqueeze(0)
-
-        # scale the symbolic representention from [0,9] to [0, 255]
-        obs = obs.mul_(self.max_ratio).byte()
-        return obs.to(self.device)
+from src.models import MiniGridNet
+from src.utils import (
+    augment_options,
+    config_to_string,
+    configure_logger,
+    wrap_env,
+)
+from src.rl_routines import Episode, DQNPolicy
 
 
 def test(opt, estimator, crt_step):
+    """ Test the agent's performance.
+    """
+    test_log = rlog.getLogger(f"{opt.experiment}.test")
+    test_log.info("Test agent after %d training steps.", crt_step)
+    test_log.reset()  # required for proper timing
 
+    # construct env and policy
     env = wrap_env(gym.make(opt.game), opt)
-    policy_evaluation = EpsilonGreedyPolicy(
+    policy = EpsilonGreedyPolicy(
         estimator,
         env.action_space.n,
         epsilon={"name": "constant", "start": 0.01},
     )
-    test_log = opt.log.groups["test"]
-    test_log.reset()  # required for proper timing
-    opt.log.log_info(
-        test_log, f"Start evaluation at {crt_step} training steps."
-    )
 
-    done = True
-
-    for step_cnt in range(1, opt.test_steps + 1):
-
-        if done:
-            if opt.seed:
-                env.seed(opt.seed)
-            elif opt.subset:
-                env.seed(random.choice(opt.subset))
-            state, done = env.reset(), False
-            ep_rw, ep_steps = 0, 0
-
-        with torch.no_grad():
-            pi = policy_evaluation(state)
-
-        state_, reward, done, _ = env.step(pi.action)
-        state = state_.clone()
-        # env.render()
-
-        ep_rw += reward
-        ep_steps += 1
-        test_log.update(
-            ep_cnt=(1 if done else 0),
-            rw_per_ep=(reward, (1 if done else 0)),
-            step_per_ep=(1, (1 if done else 0)),
-            max_q=pi.q_value,
-            test_fps=1,
-        )
-
+    step_cnt = 0
+    while step_cnt < opt.test_steps:
+        for transition, pi in Episode(env, policy, with_pi=True):
+            _, _, reward, _, done = transition
+            test_log.put(reward=reward, done=done, frame_no=1, qval=pi.q_value)
+            step_cnt += 1
+            if opt.test_render:
+                env.render()
     env.close()
 
     # do some logging
-    opt.log.log(test_log, crt_step)
-    test_log.reset()
+    summary = test_log.summarize()
+    test_log.info(
+        (
+            "[{0:8d}/{ep_cnt:8d}] R/ep={R/ep:6.2f}"
+            + "\n             | steps/ep={steps/ep:6.2f}, "
+            + "fps={test_fps:8.2f}, maxq={max_q:6.2f}."
+        ).format(crt_step, **summary)
+    )
+    test_log.trace(step=crt_step, **summary)
 
 
-def policy_iteration(
-    env, policy_evaluation, policy_improvement, experience_replay, opt
-):
+def policy_iteration(env, policy, opt):
+    """ Policy improvement routine.
 
-    train_log = opt.log.groups["train"]
-    done, ep_cnt = True, 1
+    Args:
+        env (gym.env): The game we are training on.
+        policy (DQNPolicy): A DQN agent.
+        opt (Namespace): Configuration values.
+    """
 
-    for step_cnt in range(0, opt.train_steps + 1):
+    train_log = rlog.getLogger(f"{opt.experiment}.train")
 
-        if done:
-            if opt.seed:
-                env.seed(opt.seed)
-            elif opt.subset:
-                env.seed(random.choice(opt.subset))
-            state, done = env.reset(), False
+    while policy.steps < opt.train_steps:
+        for _state, _action, reward, state, done in Episode(env, policy):
 
-        with torch.no_grad():
-            pi = policy_evaluation(state)
-        state_, reward, done, _ = env.step(pi.action)
+            # push to memory
+            policy.push((_state, _action, reward, state, done))
 
-        experience_replay.push((state, pi.action, reward, state_, done))
+            # learn
+            if policy.steps >= 10_000:
+                if policy.steps % opt.update_freq == 0:
+                    policy.learn()
 
-        if step_cnt > 10000:
-            if step_cnt % opt.update_freq == 0:
-                batch = experience_replay.sample()
-                policy_improvement(batch)
+                if policy.steps % opt.target_update == 0:
+                    policy.policy_improvement.update_target_estimator()
 
-            if step_cnt % opt.target_update == 0:
-                policy_improvement.update_target_estimator()
+            # log
+            train_log.put(
+                reward=reward, done=done, frame_no=opt.er.batch_size, step_no=1
+            )
 
-        state = state_
-        # env.render()
-
-        train_log.update(
-            ep_cnt=(1 if done else 0),
-            rw_per_ep=(reward, (1 if done else 0)),
-            step_per_ep=(1, (1 if done else 0)),
-            max_q=pi.q_value,
-            train_fps=1,
-        )
-
-        if done:
-            ep_cnt += 1
-            if ep_cnt % 100 == 0:
-                opt.log.log(train_log, step_cnt)
+            if policy.steps % 10_000 == 0:
+                summary = train_log.summarize()
+                train_log.info(
+                    (
+                        "[{0:8d}/{ep_cnt:8d}] R/ep={R/ep:6.2f}"
+                        + "\n             | steps/ep={steps/ep:6.2f}, "
+                        + "fps={learning_fps:8.2f}."
+                    ).format(policy.steps, **summary)
+                )
+                train_log.trace(step=policy.steps, **summary)
                 train_log.reset()
 
-        if step_cnt % 50000 == 0 and step_cnt != 0:
-            test(opt, deepcopy(policy_evaluation.policy.estimator), step_cnt)
-
-
-def wrap_env(env, opt):
-    env = ImgObsWrapper(env)
-    env = FrameStack(env, k=opt.hist_len)
-    env = TorchWrapper(env, device=opt.device)
-    return env
+            if policy.steps % 50000 == 0 and policy.steps != 0:
+                test(opt, deepcopy(policy.estimator), policy.steps)
 
 
 def run(opt):
+    opt = augment_options(opt)
+    configure_logger(opt)
+    rlog.info(f"\n{config_to_string(opt)}")
 
-    if opt.subset:
-        opt.subset = [random.randint(0, 10000) for _ in range(opt.subset)]
-    opt.device = torch.device(opt.device)
-    print(config_to_string(opt))
-
-    # start configuring some objects
+    # configure the Environment and the Policy
     env = wrap_env(gym.make(opt.game), opt)
 
     estimator = MiniGridNet(
-        opt.hist_len * 3, env.action_space.n, hidden_size=opt.lin_size
-    ).cuda()
-    policy_evaluation = EpsilonGreedyPolicy(
-        estimator,
+        opt.er.hist_len * 3,
         env.action_space.n,
-        epsilon={
-            "name": "linear",
-            "start": 1.0,
-            "end": 0.1,
-            "steps": opt.epsilon_steps,
-        },
-    )
+        hidden_size=opt.estimator.lin_size,
+    ).cuda()
 
-    policy_improvement = DQNPolicyImprovement(
-        estimator,
-        optim.Adam(estimator.parameters(), lr=opt.lr, eps=1e-4),
-        opt.gamma,
-        # is_double=True,
-    )
-
-    experience_replay = MemoryEfficientExperienceReplay(
-        capacity=opt.mem_size,
-        batch_size=opt.batch_size,
-        hist_len=opt.hist_len,
-        async_memory=False,
-    )
-
-    log = Logger(label=opt.experiment, path=opt.out_dir)
-    log.add_group(
-        tag="train",
-        metrics=(
-            log.SumMetric("ep_cnt"),
-            log.AvgMetric("step_per_ep"),
-            log.EpisodicMetric("rw_per_ep", emph=True),
-            log.MaxMetric("max_q"),
-            log.FPSMetric("train_fps"),
+    policy = DQNPolicy(
+        EpsilonGreedyPolicy(
+            estimator, env.action_space.n, epsilon=opt.exploration.__dict__
         ),
-        console_options=("white", "on_blue", ["bold"]),
-    )
-    log.add_group(
-        tag="test",
-        metrics=(
-            log.SumMetric("ep_cnt"),
-            log.EpisodicMetric("rw_per_ep", emph=True),
-            log.AvgMetric("step_per_ep"),
-            log.MaxMetric("max_q"),
-            log.FPSMetric("test_fps"),
+        DQNPolicyImprovement(
+            estimator,
+            optim.Adam(estimator.parameters(), lr=opt.lr, eps=1e-4),
+            opt.gamma,
+            is_double=opt.double,
         ),
-        console_options=("white", "on_magenta", ["bold"]),
+        ExperienceReplay(**opt.er.__dict__)(),
     )
-    opt.log = log
+    rlog.info(policy)
 
-    policy_iteration(
-        env, policy_evaluation, policy_improvement, experience_replay, opt
-    )
+    # start training
+    policy_iteration(env, policy, opt)
 
 
 def main():
     # read config files using liftoff
-    opt = read_config()
-
+    opt = parse_opts()
     run(opt)
 
 
