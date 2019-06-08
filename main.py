@@ -12,7 +12,8 @@ from wintermute.policy_evaluation import EpsilonGreedyPolicy
 from wintermute.policy_improvement import DQNPolicyImprovement
 from wintermute.replay import ExperienceReplay
 
-from src.models import MiniGridNet
+from src.models import MiniGridNet, BootstrappedEstimator
+from src.bootstrapping import BootstrappedDQNPolicyImprovement
 from src.utils import (
     augment_options,
     config_to_string,
@@ -119,19 +120,33 @@ def run(opt):
         hidden_size=opt.estimator.lin_size,
     ).cuda()
 
-    policy = DQNPolicy(
-        EpsilonGreedyPolicy(
-            estimator, env.action_space.n, epsilon=opt.exploration.__dict__
-        ),
-        DQNPolicyImprovement(
+    if hasattr(opt.estimator, "ensemble"):
+        estimator = BootstrappedEstimator(estimator, B=opt.estimator.ensemble.B)
+        policy_improvement = BootstrappedDQNPolicyImprovement(
             estimator,
             optim.Adam(estimator.parameters(), lr=opt.lr, eps=1e-4),
             opt.gamma,
             is_double=opt.double,
+        )
+    else:
+        policy_improvement = DQNPolicyImprovement(
+            estimator,
+            optim.Adam(estimator.parameters(), lr=opt.lr, eps=1e-4),
+            opt.gamma,
+            is_double=opt.double,
+        )
+
+    policy = DQNPolicy(
+        EpsilonGreedyPolicy(
+            estimator, env.action_space.n, epsilon=opt.exploration.__dict__
         ),
+        policy_improvement,
         ExperienceReplay(**opt.er.__dict__)(),
     )
+
+    # additionally info
     rlog.info(policy)
+    rlog.info(estimator)
 
     # start training
     policy_iteration(env, policy, opt)
