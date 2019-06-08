@@ -17,7 +17,9 @@ estimator:
   lin_size: 64
 
 er:
-  alpha: .95  # when this field is present a PER is built.
+  alpha: .95  # when this field is not None a PER is built.
+  beta: null
+  optim_steps: 475_000  # (train_steps - 100_000) / update_freq
   capacity: 100_000
   batch_size: 32
   hist_len: 3
