@@ -10,6 +10,7 @@ test_render: no
 lr: 0.001
 gamma: 0.92
 double: True
+start_learning: 10_000
 update_freq: 4
 target_update: 500
 
@@ -19,7 +20,6 @@ estimator:
 er:
   alpha: null  # when this field is not null a PER is built.
   beta: null
-  optim_steps: 475_000  # (train_steps - 100_000) / update_freq
   capacity: 100_000
   batch_size: 32
   hist_len: 3
