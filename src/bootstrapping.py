@@ -67,6 +67,7 @@ class BootstrappedDQNPolicyImprovement(DQNPolicyImprovement):
                 self.gamma,
                 target_estimator=partial(self.target_estimator, mid=mid),
                 is_double=self.is_double,
+                loss_fn=torch.nn.MSELoss(reduction="none")
             )
             for mid, batch_, next_state_mask in batches
         ]
@@ -75,11 +76,12 @@ class BootstrappedDQNPolicyImprovement(DQNPolicyImprovement):
         dqn_loss = torch.zeros((bsz, 1), device=dqn_losses[0].loss.device)
         for loss, (mid, _, _) in zip(dqn_losses, batches):
             dqn_loss[boot_masks[mid]] += loss.loss
-
+        
         # TODO: gradient rescalling!!!
         return EnsembleDQNLoss(
             loss=dqn_loss,
-            variance=self.estimator.var(batch[0]).gather(1, batch[1]),
+            # variance=self.estimator.var(batch[0]).gather(1, batch[1]),
+            variance=None,
             component_losses=dqn_losses,
         )
 
@@ -115,8 +117,8 @@ def main():
         ],
         torch.bernoulli(probs).byte(),
     ]
-    result = policy_improvement(batch)
-    print(result)
+
+    policy_improvement(batch)
 
 
 if __name__ == "__main__":

@@ -12,7 +12,8 @@ from wintermute.policy_evaluation import EpsilonGreedyPolicy
 from wintermute.policy_improvement import DQNPolicyImprovement
 from wintermute.replay import ExperienceReplay
 
-from src.models import MiniGridNet
+from src.models import MiniGridNet, BootstrappedEstimator
+from src.bootstrapping import BootstrappedDQNPolicyImprovement
 from src.utils import (
     augment_options,
     config_to_string,
@@ -77,7 +78,7 @@ def policy_iteration(env, policy, opt):
             policy.push((_state, _action, reward, state, done))
 
             # learn
-            if policy.steps >= 10_000:
+            if policy.steps >= opt.start_learning:
                 if policy.steps % opt.update_freq == 0:
                     policy.learn()
 
@@ -101,7 +102,7 @@ def policy_iteration(env, policy, opt):
                 train_log.trace(step=policy.steps, **summary)
                 train_log.reset()
 
-            if policy.steps % 50000 == 0 and policy.steps != 0:
+            if policy.steps % 50_000 == 0 and policy.steps != 0:
                 test(opt, deepcopy(policy.estimator), policy.steps)
 
 
@@ -119,19 +120,33 @@ def run(opt):
         hidden_size=opt.estimator.lin_size,
     ).cuda()
 
-    policy = DQNPolicy(
-        EpsilonGreedyPolicy(
-            estimator, env.action_space.n, epsilon=opt.exploration.__dict__
-        ),
-        DQNPolicyImprovement(
+    if hasattr(opt.estimator, "ensemble"):
+        estimator = BootstrappedEstimator(estimator, B=opt.estimator.ensemble.B)
+        policy_improvement = BootstrappedDQNPolicyImprovement(
             estimator,
             optim.Adam(estimator.parameters(), lr=opt.lr, eps=1e-4),
             opt.gamma,
             is_double=opt.double,
+        )
+    else:
+        policy_improvement = DQNPolicyImprovement(
+            estimator,
+            optim.Adam(estimator.parameters(), lr=opt.lr, eps=1e-4),
+            opt.gamma,
+            is_double=opt.double,
+        )
+
+    policy = DQNPolicy(
+        EpsilonGreedyPolicy(
+            estimator, env.action_space.n, epsilon=opt.exploration.__dict__
         ),
+        policy_improvement,
         ExperienceReplay(**opt.er.__dict__)(),
     )
+
+    # additionally info
     rlog.info(policy)
+    rlog.info(estimator)
 
     # start training
     policy_iteration(env, policy, opt)

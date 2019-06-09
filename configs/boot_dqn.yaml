@@ -9,21 +9,24 @@ test_render: no
 
 lr: 0.001
 gamma: 0.92
-double: True
-start_learning: 10_000
+double: False
 update_freq: 4
 target_update: 500
 
 estimator:
   lin_size: 64
+  ensemble:
+    B: 5
 
 er:
-  alpha: .95  # when this field is not None a PER is built.
+  alpha: null  # when this field is not None a PER is built.
   beta: null
+  optim_steps: 475_000  # (train_steps - 100_000) / update_freq
   capacity: 100_000
   batch_size: 32
   hist_len: 3
   async_memory: no
+  bootstrap_args: [5, 1.0]
 
 exploration:
   name: linear
