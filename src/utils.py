@@ -78,6 +78,10 @@ def augment_options(opt):
         # `opt.seed` is of the form `r10`, `r5`, etc.
         opt.seed = [random.randint(0, 10000) for _ in range(int(opt.seed[1:]))]
     opt.device = torch.device(opt.device)
+    if hasattr(opt.er, "beta") and opt.er.beta is not None:
+        opt.er.optim_steps = (
+            opt.train_steps - opt.start_learning
+        ) / opt.update_freq
     return opt
 
 

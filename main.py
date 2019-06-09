@@ -78,7 +78,7 @@ def policy_iteration(env, policy, opt):
             policy.push((_state, _action, reward, state, done))
 
             # learn
-            if policy.steps >= 10_000:
+            if policy.steps >= opt.start_learning:
                 if policy.steps % opt.update_freq == 0:
                     policy.learn()
 
@@ -102,7 +102,7 @@ def policy_iteration(env, policy, opt):
                 train_log.trace(step=policy.steps, **summary)
                 train_log.reset()
 
-            if policy.steps % 50000 == 0 and policy.steps != 0:
+            if policy.steps % 50_000 == 0 and policy.steps != 0:
                 test(opt, deepcopy(policy.estimator), policy.steps)
 
 
