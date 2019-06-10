@@ -17,10 +17,12 @@ target_update: 500
 estimator:
   lin_size: 64
   dropout: 0.1
-  thompson: true
+  thompson: false
+  mc_samples: 10
 
 er:
-  alpha: .95  # when this field is not None a PER is built.
+  priority: td  # uni and var are other options.
+  alpha: .9  # when this field is not None a PER is built.
   beta: null
   capacity: 100_000
   batch_size: 32

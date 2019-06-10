@@ -18,15 +18,24 @@ class EpsilonGreedyOutput(NamedTuple):
     full: object
 
 
-class EnsembleDQNLoss(NamedTuple):
+class BayesianDQNLoss(NamedTuple):
     r""" DQNLoss but for ensembles. """
 
-    loss: torch.Tensor
-    variance: torch.Tensor
-    component_losses: list  # list of DQNLoss objects
+    loss: torch.Tensor  # (batch_size * 1) tensor of losses.
+    mc_sample_losses: list  # list of DQNLosses for each MC sample.
 
 
 class DropPE(EpsilonGreedyPolicy):
+    """ Policy-Evaluation for Dropout-SVI estimators.
+
+        It has two exploration modes:
+
+        - thompson-sampling
+        - epsilon-greedy
+        - a combination of the two because there are no asserts in place to
+        avoid this :).
+    """
+
     def __init__(self, estimator, action_space, epsilon, thompson=False):
         super().__init__(estimator, action_space, epsilon)
         self._thompson = thompson
@@ -36,10 +45,48 @@ class DropPE(EpsilonGreedyPolicy):
         pi = super().act(x)
         self.policy.estimator.train(mode=True)
         return pi
-    
+
     def __str__(self):
-        rep = super().__str__()
-        return f"Drop{rep}[thompson={self._thompson}]"
+        return f"DropPolicyEvaluation(thompson={self._thompson})"
+
+
+class DropPI(DQNPolicyImprovement):
+    """ Policy Improvement for Dropout-SVI estimator.
+    """
+
+    def __call__(self, batch, cb=None):
+        batch = [el.to(self.device) for el in batch]
+
+        dqn_loss = get_dqn_loss(
+            batch,
+            self.estimator,
+            self.gamma,
+            target_estimator=self.target_estimator,
+            is_double=self.is_double,
+            loss_fn=self.loss_fn,
+        )
+
+        loss = BayesianDQNLoss(
+            loss=dqn_loss.loss,
+            mc_sample_losses=[dqn_loss],
+        )
+
+        if cb:
+            loss = cb(loss)
+        else:
+            loss = loss.loss.mean()
+
+        loss.backward()
+        self.update_estimator()
+
+    def var(self, states, actions=None):
+        """ Return the variance of the Q-values.
+        """
+        with torch.no_grad():
+            qval_vars = self.estimator.var(states)
+        if actions is not None:
+            return qval_vars.gather(1, actions)
+        return qval_vars
 
 
 class BootstrappedPE:
@@ -130,7 +177,7 @@ class BootstrappedPE:
         return self.__estimator
 
 
-class BootstrappedDQNPolicyImprovement(DQNPolicyImprovement):
+class BootstrappedPI(DQNPolicyImprovement):
     r""" Object doing DQN Policy improvement step with a Bootstrapped
     Ensemble estimator.
     """
@@ -192,11 +239,9 @@ class BootstrappedDQNPolicyImprovement(DQNPolicyImprovement):
             dqn_loss[boot_masks[mid]] += loss.loss
 
         # TODO: gradient rescalling!!!
-        return EnsembleDQNLoss(
+        return BayesianDQNLoss(
             loss=dqn_loss,
-            # variance=self.estimator.var(batch[0]).gather(1, batch[1]),
-            variance=None,
-            component_losses=dqn_losses,
+            mc_sample_losses=dqn_losses,
         )
 
 
@@ -213,7 +258,7 @@ def main():
     print(policy(x))
     print(ensemble.var(x, 2))
 
-    policy_improvement = BootstrappedDQNPolicyImprovement(
+    policy_improvement = BootstrappedPI(
         ensemble,
         torch.optim.Adam(ensemble.parameters(), lr=0.00235),
         0.92,

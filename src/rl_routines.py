@@ -9,12 +9,27 @@ def priority_update(mem, idxs, weights, dqn_loss, variances=None):
     replay and for computing the importance sampling corrected loss.
     """
     losses = dqn_loss.loss
-    with torch.no_grad():
-        td_errors = (dqn_loss.qsa_targets - dqn_loss.qsa).detach().abs()
 
-    if variances:
+    if variances is not None:
+        # print("var: \n", variances.mean())
         mem.update(idxs, [var.item() for var in variances.detach()])
         return (losses * weights.to(losses.device).view_as(losses)).mean()
+
+    if hasattr(dqn_loss, "mc_sample_losses"):
+        # take |td-error| of each mc sample loss and average them
+        with torch.no_grad():
+            td_errors = torch.stack(
+                [
+                    (mcsl.qsa_targets - mcsl.qsa).detach().abs()
+                    for mcsl in dqn_loss.mc_sample_losses
+                ],
+                0,
+            ).mean(0)
+    else:
+        with torch.no_grad():
+            td_errors = (dqn_loss.qsa_targets - dqn_loss.qsa).detach().abs()
+
+    # print(f"tde: {td_errors.shape}\n", td_errors.squeeze())
     mem.update(idxs, [td.item() for td in td_errors])
     return (losses * weights.to(losses.device).view_as(losses)).mean()
 
@@ -25,7 +40,11 @@ class DQNPolicy:
     """
 
     def __init__(  # pylint: disable=bad-continuation
-        self, policy_evaluation, policy_improvement, experience_replay
+        self,
+        policy_evaluation,
+        policy_improvement,
+        experience_replay,
+        priority="uni",
     ):
         """ This class simplifies the interaction with the three components
         of the DQN agent.
@@ -38,6 +57,7 @@ class DQNPolicy:
         self.policy_evaluation = policy_evaluation
         self.policy_improvement = policy_improvement
         self.experience_replay = experience_replay
+        self.__priority = priority
         self.__step_cnt = 0
 
     def act(self, state):
@@ -51,14 +71,29 @@ class DQNPolicy:
         """ Learn from a batch of experiences sampled from experience replay.
         """
         batch = self.experience_replay.sample()
-        if len(batch) == 3:
-            # this is a prioritized sampler
+
+        if self.__priority == "tde":
+            # this is a prioritized sampler using |TD-error|
             batch, idxs, weights = batch
             clbk = partial(
                 priority_update, self.experience_replay, idxs, weights
             )
+        elif self.__priority == "var":
+            # this is a prioritized sampler using sigma**2(s, a)
+            batch, idxs, weights = batch
+            with torch.no_grad():
+                variances = self.policy_improvement.var(batch[0], batch[1])
+            clbk = partial(
+                priority_update,
+                self.experience_replay,
+                idxs,
+                weights,
+                variances=variances,
+            )
         else:
+            # this is uniform sampling
             clbk = None
+
         self.policy_improvement(batch, cb=clbk)
 
     def push(self, transition):
@@ -79,10 +114,11 @@ class DQNPolicy:
         return self.policy_improvement.estimator
 
     def __str__(self):
-        return "\nDQNPolicy(\n  | {0}\n  | {1}\n  | {2}\n)".format(
+        return "\nDQNPolicy(\n  | {0}\n  | {1}\n  | {2}\n  | {3}\n)".format(
             self.policy_evaluation,
             self.policy_improvement,
             self.experience_replay,
+            f"priority={self.__priority}"
         )
 
 
