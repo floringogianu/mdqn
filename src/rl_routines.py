@@ -81,8 +81,12 @@ class DQNPolicy:
         elif self.__priority == "var":
             # this is a prioritized sampler using sigma**2(s, a)
             batch, idxs, weights = batch
+            if len(batch) == 2:
+                # the experience replay works with bootstrapped data
+                # and batch = [[transitions...], boot_mask]
+                batch_, _ = batch
             with torch.no_grad():
-                variances = self.policy_improvement.var(batch[0], batch[1])
+                variances = self.policy_evaluation.var(batch_[0], batch_[1])
             clbk = partial(
                 priority_update,
                 self.experience_replay,

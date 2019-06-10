@@ -18,16 +18,17 @@ target_update: 500
 estimator:
   lin_size: 24
   ensemble:
-    B: 5
+    B: 10
 
 er:
-  alpha: null  # when this field is not None a PER is built.
+  priority: var  # (uni, tde, var)
+  alpha: 0.9    # when this field is not None a PER is built.
   beta: null
   capacity: 100_000
   batch_size: 32
-  hist_len: 3
+  hist_len: 2
   async_memory: no
-  bootstrap_args: [5, 0.9]
+  bootstrap_args: [10, 0.5]
 
 exploration:
   name: linear

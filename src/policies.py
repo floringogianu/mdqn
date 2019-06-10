@@ -46,6 +46,15 @@ class DropPE(EpsilonGreedyPolicy):
         self.policy.estimator.train(mode=True)
         return pi
 
+    def var(self, states, actions=None):
+        """ Return the variance of the Q-values.
+        """
+        with torch.no_grad():
+            qval_vars = self.policy.estimator.var(states)
+        if actions is not None:
+            return qval_vars.gather(1, actions)
+        return qval_vars
+
     def __str__(self):
         return f"DropPolicyEvaluation(thompson={self._thompson})"
 
@@ -78,15 +87,6 @@ class DropPI(DQNPolicyImprovement):
 
         loss.backward()
         self.update_estimator()
-
-    def var(self, states, actions=None):
-        """ Return the variance of the Q-values.
-        """
-        with torch.no_grad():
-            qval_vars = self.estimator.var(states)
-        if actions is not None:
-            return qval_vars.gather(1, actions)
-        return qval_vars
 
 
 class BootstrappedPE:
@@ -162,6 +162,15 @@ class BootstrappedPE:
         return EpsilonGreedyOutput(
             action=action, q_value=qval, full=ensemble_qvals
         )
+
+    def var(self, states, actions=None):
+        """ Return the variance of the Q-values.
+        """
+        with torch.no_grad():
+            qval_vars = self.estimator.var(states)
+        if actions is not None:
+            return qval_vars.gather(1, actions)
+        return qval_vars
 
     def __call__(self, state):
         return self.act(state)

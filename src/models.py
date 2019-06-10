@@ -153,9 +153,9 @@ class BootstrappedEstimator(nn.Module):
         with torch.no_grad():
             ys = [model(x) for model in self.__ensemble]
 
-        if action is None:
-            return torch.stack(ys, 0).var(0)
-        return torch.stack(ys, 0).var(0)[0][action]
+        if action is not None:
+            return torch.stack(ys, 0).var(0)[0][action]
+        return torch.stack(ys, 0).var(0)
 
     def parameters(self, recurse=True):
         """ Groups the ensemble parameters so that the optimizer can keep
