@@ -13,7 +13,7 @@ from wintermute.policy_improvement import DQNPolicyImprovement
 from wintermute.replay import ExperienceReplay
 
 from src.models import MiniGridNet, BootstrappedEstimator
-from src.bootstrapping import BootstrappedDQNPolicyImprovement
+from src.bootstrapping import BootstrappedDQNPolicyImprovement, BootstrappedPE
 from src.utils import (
     augment_options,
     config_to_string,
@@ -32,11 +32,19 @@ def test(opt, estimator, crt_step):
 
     # construct env and policy
     env = wrap_env(gym.make(opt.game), opt)
-    policy = EpsilonGreedyPolicy(
-        estimator,
-        env.action_space.n,
-        epsilon={"name": "constant", "start": 0.01},
-    )
+    if hasattr(opt.estimator, "ensemble"):
+        policy = BootstrappedPE(
+            estimator,
+            env.action_space.n,
+            epsilon={"name": "constant", "start": 0.01},
+            vote=True,
+        )
+    else:
+        policy = EpsilonGreedyPolicy(
+            estimator,
+            env.action_space.n,
+            epsilon={"name": "constant", "start": 0.01},
+        )
 
     step_cnt = 0
     while step_cnt < opt.test_steps:
@@ -55,7 +63,7 @@ def test(opt, estimator, crt_step):
             "[{0:8d}/{ep_cnt:8d}] R/ep={R/ep:6.2f}"
             + "\n             | steps/ep={steps/ep:6.2f}, "
             + "fps={test_fps:8.2f}, maxq={max_q:6.2f}."
-        ).format(crt_step, **summary)
+        ).format(step_cnt, **summary)
     )
     test_log.trace(step=crt_step, **summary)
 
@@ -122,6 +130,9 @@ def run(opt):
 
     if hasattr(opt.estimator, "ensemble"):
         estimator = BootstrappedEstimator(estimator, B=opt.estimator.ensemble.B)
+        policy_evaluation = BootstrappedPE(
+            estimator, env.action_space.n, opt.exploration.__dict__, vote=True
+        )
         policy_improvement = BootstrappedDQNPolicyImprovement(
             estimator,
             optim.Adam(estimator.parameters(), lr=opt.lr, eps=1e-4),
@@ -129,6 +140,9 @@ def run(opt):
             is_double=opt.double,
         )
     else:
+        policy_evaluation = EpsilonGreedyPolicy(
+            estimator, env.action_space.n, epsilon=opt.exploration.__dict__
+        )
         policy_improvement = DQNPolicyImprovement(
             estimator,
             optim.Adam(estimator.parameters(), lr=opt.lr, eps=1e-4),
@@ -137,9 +151,7 @@ def run(opt):
         )
 
     policy = DQNPolicy(
-        EpsilonGreedyPolicy(
-            estimator, env.action_space.n, epsilon=opt.exploration.__dict__
-        ),
+        policy_evaluation,
         policy_improvement,
         ExperienceReplay(**opt.er.__dict__)(),
     )

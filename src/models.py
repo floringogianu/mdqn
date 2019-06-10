@@ -88,7 +88,7 @@ class BootstrappedEstimator(nn.Module):
         """
         if mid is not None:
             return self.__ensemble[mid](x)
-        return torch.stack([model(x) for model in self.__ensemble], 0).mean(0)
+        return torch.stack([model(x) for model in self.__ensemble], 0)
 
     def var(self, x, action=None):
         """ Returns the variance (uncertainty) of the ensemble's prediction
