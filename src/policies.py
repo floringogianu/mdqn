@@ -26,6 +26,22 @@ class EnsembleDQNLoss(NamedTuple):
     component_losses: list  # list of DQNLoss objects
 
 
+class DropPE(EpsilonGreedyPolicy):
+    def __init__(self, estimator, action_space, epsilon, thompson=False):
+        super().__init__(estimator, action_space, epsilon)
+        self._thompson = thompson
+
+    def act(self, x):
+        self.policy.estimator.train(mode=self._thompson)
+        pi = super().act(x)
+        self.policy.estimator.train(mode=True)
+        return pi
+    
+    def __str__(self):
+        rep = super().__str__()
+        return f"Drop{rep}[thompson={self._thompson}]"
+
+
 class BootstrappedPE:
     """ Implements the policy evaluation step for bootstrapped estimators
         (ensembles). It has two behaviours:

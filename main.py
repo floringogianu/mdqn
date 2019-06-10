@@ -12,8 +12,12 @@ from wintermute.policy_evaluation import EpsilonGreedyPolicy
 from wintermute.policy_improvement import DQNPolicyImprovement
 from wintermute.replay import ExperienceReplay
 
-from src.models import MiniGridNet, BootstrappedEstimator
-from src.bootstrapping import BootstrappedDQNPolicyImprovement, BootstrappedPE
+from src.models import MiniGridNet, MiniGridDropnet, BootstrappedEstimator
+from src.policies import (
+    DropPE,
+    BootstrappedDQNPolicyImprovement,
+    BootstrappedPE,
+)
 from src.utils import (
     augment_options,
     config_to_string,
@@ -129,11 +133,30 @@ def run(opt):
     ).cuda()
 
     if hasattr(opt.estimator, "ensemble"):
+        # Build Bootstrapped Ensembles objects
         estimator = BootstrappedEstimator(estimator, B=opt.estimator.ensemble.B)
         policy_evaluation = BootstrappedPE(
             estimator, env.action_space.n, opt.exploration.__dict__, vote=True
         )
         policy_improvement = BootstrappedDQNPolicyImprovement(
+            estimator,
+            optim.Adam(estimator.parameters(), lr=opt.lr, eps=1e-4),
+            opt.gamma,
+            is_double=opt.double,
+        )
+    elif hasattr(opt.estimator, "dropout"):
+        # Build Variational Dropout objects
+        estimator = MiniGridDropnet(
+            opt.er.hist_len * 3,
+            env.action_space.n,
+            hidden_size=opt.estimator.lin_size,
+            p=opt.estimator.dropout
+        ).cuda()
+        policy_evaluation = DropPE(
+            estimator, env.action_space.n, epsilon=opt.exploration.__dict__,
+            thompson=opt.estimator.thompson
+        )
+        policy_improvement = DQNPolicyImprovement(
             estimator,
             optim.Adam(estimator.parameters(), lr=opt.lr, eps=1e-4),
             opt.gamma,
