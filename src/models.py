@@ -17,6 +17,54 @@ def init_weights(module):
         module.bias.data.zero_()
 
 
+class MiniGridDropnet(nn.Module):
+    def __init__(
+        self, in_channels, action_no, hidden_size=64, p=0.1, mc_samples=10
+    ):
+        super(MiniGridDropnet, self).__init__()
+        self.in_channels = in_channels
+        self.mc_samples = mc_samples
+
+        self.features = nn.Sequential(
+            nn.Conv2d(in_channels, 16, kernel_size=3),
+            nn.ReLU(inplace=True),
+            nn.Dropout2d(p=p),
+            nn.Conv2d(16, 16, kernel_size=2),
+            nn.ReLU(inplace=True),
+            nn.Dropout2d(p=p),
+            nn.Conv2d(16, 16, kernel_size=2),
+            nn.ReLU(inplace=True),
+        )
+        self.head = nn.Sequential(
+            nn.Dropout(p=p),
+            nn.Linear(144, hidden_size),
+            nn.ReLU(inplace=True),
+            nn.Dropout(p=p),
+            nn.Linear(hidden_size, action_no),
+        )
+        self.reset_parameters()
+
+    def forward(self, x):
+        assert (
+            x.dtype == torch.uint8
+        ), "The model expects states of type ByteTensor"
+        x = x.float().div_(255)
+        if x.ndimension() == 5:
+            x = x.view(x.shape[0], x.shape[1] * x.shape[2], 7, 7)
+        return self.head(self.features(x).view(x.size(0), -1))
+    
+    def var(self, x):
+        with torch.no_grad():
+            ys = torch.stack([self(x) for _ in range(self.mc_samples)], 0)
+            return ys.var(0)
+
+    def reset_parameters(self):
+        """ Reinitializez parameters to Xavier Uniform for all layers and
+            0 bias.
+        """
+        self.apply(init_weights)
+
+
 class MiniGridNet(nn.Module):
     def __init__(self, in_channels, action_no, hidden_size=64):
         super(MiniGridNet, self).__init__()
@@ -88,7 +136,7 @@ class BootstrappedEstimator(nn.Module):
         """
         if mid is not None:
             return self.__ensemble[mid](x)
-        return torch.stack([model(x) for model in self.__ensemble], 0).mean(0)
+        return torch.stack([model(x) for model in self.__ensemble], 0)
 
     def var(self, x, action=None):
         """ Returns the variance (uncertainty) of the ensemble's prediction
@@ -105,9 +153,9 @@ class BootstrappedEstimator(nn.Module):
         with torch.no_grad():
             ys = [model(x) for model in self.__ensemble]
 
-        if action is None:
-            return torch.stack(ys, 0).var(0)
-        return torch.stack(ys, 0).var(0)[0][action]
+        if action is not None:
+            return torch.stack(ys, 0).var(0)[0][action]
+        return torch.stack(ys, 0).var(0)
 
     def parameters(self, recurse=True):
         """ Groups the ensemble parameters so that the optimizer can keep

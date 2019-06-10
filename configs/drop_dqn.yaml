@@ -1,5 +1,4 @@
 game: "MiniGrid-SimpleCrossingS9N1-v0"
-# game: MiniGrid-Empty-5x5-v0
 # either an int or a number of random seeds, ex.: r10 or r5
 # if seed: null then we train and test on all mdps.
 seed: null
@@ -10,25 +9,25 @@ test_render: no
 
 lr: 0.001
 gamma: 0.92
-double: False
-start_learning: 1_000
+double: True
+start_learning: 10_000
 update_freq: 4
 target_update: 500
 
 estimator:
-  lin_size: 24
-  ensemble:
-    B: 10
+  lin_size: 64
+  dropout: 0.1
+  thompson: false
+  mc_samples: 10
 
 er:
-  priority: var  # (uni, tde, var)
-  alpha: 0.9    # when this field is not None a PER is built.
+  priority: td  # uni and var are other options.
+  alpha: .9  # when this field is not None a PER is built.
   beta: null
   capacity: 100_000
   batch_size: 32
-  hist_len: 2
+  hist_len: 3
   async_memory: no
-  bootstrap_args: [10, 0.5]
 
 exploration:
   name: linear
