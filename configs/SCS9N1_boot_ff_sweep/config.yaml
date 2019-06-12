@@ -1,7 +1,8 @@
 lr: [0.0005, 0.00025]
 
 estimator:
-  ensemble: [5, 7, 11]
+  ensemble:
+    B: [5, 7, 11]
 
 er:
   alpha: [.4, .7, 0.9]
