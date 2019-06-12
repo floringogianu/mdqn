@@ -16,8 +16,10 @@ target_update: 500
 
 estimator:
   lin_size: 64
+  ff: true
 
 er:
+  priority: tde
   alpha: .95  # when this field is not None a PER is built.
   beta: null
   capacity: 100_000

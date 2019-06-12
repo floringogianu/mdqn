@@ -204,9 +204,19 @@ class BootstrappedPI(DQNPolicyImprovement):
 
     def __get_dqn_loss(self, batch):
         batch, boot_masks = batch
-        bsz = batch[0].shape[0]
+        bsz, bsz_ = batch[0].shape[0], batch[3].shape[0]
         batch = [el.to(self.device) for el in batch]
         boot_masks.to(self.device)
+        # pass through the feature extractor and replace states
+        # with features. Also pass next_states once more if Double-DQN.
+        if self.estimator.has_feature_extractor:
+            online = self.estimator.feature_extractor
+            target = self.target_estimator.feature_extractor
+            batch[0] = online(batch[0]).view(bsz, -1)
+            # if self.is_double:
+            #     with torch.no_grad():
+            #         features_ = online(batch[3])
+            batch[3] = target(batch[3]).view(bsz_, -1)
         # split batch in mini-batches for each ensemble component.
         # because now state and state_ have differen dimensions we cannot do:
         # batches = [[el[bm] for el in batch] for bm in boot_masks]

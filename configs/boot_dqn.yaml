@@ -8,27 +8,29 @@ train_steps: 2_000_000
 test_steps: 30000
 test_render: no
 
-lr: 0.001
+lr: 0.0005
 gamma: 0.92
 double: False
-start_learning: 1_000
+start_learning: 10_000
 update_freq: 4
 target_update: 500
 
 estimator:
   lin_size: 24
+  ff: yes
   ensemble:
-    B: 10
+    full: yes
+    B: 7
 
 er:
   priority: var  # (uni, tde, var)
-  alpha: 0.9    # when this field is not None a PER is built.
+  alpha: 0.7    # when this field is not None a PER is built.
   beta: null
   capacity: 100_000
   batch_size: 32
   hist_len: 2
   async_memory: no
-  bootstrap_args: [10, 0.5]
+  bootstrap_args: [-1, 0.5]
 
 exploration:
   name: linear
