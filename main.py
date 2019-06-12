@@ -6,6 +6,7 @@ import torch
 import gym
 import gym_minigrid  # pylint: disable=unused-import
 from torch import optim
+from numpy import random
 
 import rlog
 from liftoff import parse_opts
@@ -13,14 +14,14 @@ from wintermute.policy_evaluation import EpsilonGreedyPolicy
 from wintermute.policy_improvement import DQNPolicyImprovement
 from wintermute.replay import ExperienceReplay
 
-from src.models import MiniGridNet, MiniGridDropnet, BootstrappedEstimator
-from src.policies import DropPE, DropPI, BootstrappedPI, BootstrappedPE
-from src.utils import (
-    augment_options,
-    config_to_string,
-    configure_logger,
-    wrap_env,
+from src.models import (
+    MiniGridNet,
+    MiniGridDropnet,
+    BootstrappedEstimator,
+    MiniGridFF,
 )
+from src.policies import DropPE, DropPI, BootstrappedPI, BootstrappedPE
+from src.utils import config_to_string, configure_logger, wrap_env
 from src.rl_routines import Episode, DQNPolicy
 
 
@@ -115,16 +116,51 @@ def policy_iteration(env, policy, opt):
                 test(opt, deepcopy(policy.estimator), policy.steps)
 
 
+def augment_options(opt):
+    """ Adds fields to `opt`.
+
+        This function and `check_options_are_valid()` are important
+        for the setup of the experiment.
+    """
+    # set the experiment name
+    if "experiment" not in opt.__dict__:
+        opt.experiment = f"{''.join(opt.game.split('-')[1:-1])}-DQN"
+    # sample a number of seeds so that we can limit the no of
+    # maze configurations
+    if isinstance(opt.seed, str):
+        # `opt.seed` is of the form `r10`, `r5`, etc.
+        opt.seed = [random.randint(0, 10000) for _ in range(int(opt.seed[1:]))]
+    opt.device = torch.device(opt.device)
+    # set the degradation schedule of the `beta` importance sampling
+    # term
+    if hasattr(opt.er, "beta") and opt.er.beta is not None:
+        opt.er.optim_steps = (
+            opt.train_steps - opt.start_learning
+        ) / opt.update_freq
+    # set the no of ensemble components in the ER options
+    if hasattr(opt.estimator, "ensemble"):
+        opt.er.bootstrap_args[0] = opt.estimator.ensemble.B
+    return opt
+
+
 def check_options_are_valid(opt):
     """ Checks if experiment configuration is consistent.
     """
     if opt.er.alpha is None:
-        assert opt.er.priority == "uni", "Priority can only be uniform if \
+        assert (
+            opt.er.priority == "uni"
+        ), "Priority can only be uniform if \
             `opt.er.alpha` is None"
     else:
-        assert opt.er.priority in ("tde", "var"), "Priority cannot be uniform \
+        assert opt.er.priority in (
+            "tde",
+            "var",
+        ), "Priority cannot be uniform \
             if `opt.er.alpha` has a value."
-
+    if hasattr(opt.estimator, "ensemble"):
+        assert (
+            opt.er.bootstrap_args[0] == opt.estimator.ensemble.B
+        ), "The no of ensemble components cannot differ."
 
 
 def run(opt):
@@ -138,15 +174,24 @@ def run(opt):
     # configure the Environment and the Policy
     env = wrap_env(gym.make(opt.game), opt)
 
-    estimator = MiniGridNet(
-        opt.er.hist_len * 3,
-        env.action_space.n,
-        hidden_size=opt.estimator.lin_size,
-    ).cuda()
+    if opt.estimator.ff:
+        estimator = MiniGridFF(
+            opt.er.hist_len * 3,
+            env.action_space.n,
+            hidden_size=opt.estimator.lin_size,
+        ).cuda()
+    else:
+        estimator = MiniGridNet(
+            opt.er.hist_len * 3,
+            env.action_space.n,
+            hidden_size=opt.estimator.lin_size,
+        ).cuda()
 
     if hasattr(opt.estimator, "ensemble"):
         # Build Bootstrapped Ensembles objects
-        estimator = BootstrappedEstimator(estimator, B=opt.estimator.ensemble.B)
+        estimator = BootstrappedEstimator(
+            estimator, **opt.estimator.ensemble.__dict__
+        )
         policy_evaluation = BootstrappedPE(
             estimator, env.action_space.n, opt.exploration.__dict__, vote=True
         )
@@ -192,7 +237,7 @@ def run(opt):
         policy_evaluation,
         policy_improvement,
         ExperienceReplay(**opt.er.__dict__)(),
-        priority=opt.er.priority
+        priority=opt.er.priority,
     )
 
     # additionally info
