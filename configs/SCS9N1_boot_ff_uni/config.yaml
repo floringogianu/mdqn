@@ -1,0 +1,8 @@
+lr: [0.0005, 0.00025]
+
+estimator:
+  ensemble:
+    B: [5, 7, 11]
+
+er:
+  bootstrap_args: [[-1, 0.5], [-1, 0.9]]
