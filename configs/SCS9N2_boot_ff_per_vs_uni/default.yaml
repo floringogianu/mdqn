@@ -1,0 +1,42 @@
+# boot sweep, fully-connected.
+
+game: "MiniGrid-SimpleCrossingS9N2-v0"
+# either an int or a number of random seeds, ex.: r10 or r5
+# if seed: null then we train and test on all mdps.
+seed: null
+
+train_steps: 1_000_000
+test_steps: 30000
+test_render: no
+
+lr: 0.0005
+gamma: 0.92
+double: False
+start_learning: 10_000
+update_freq: 4
+target_update: 500
+
+estimator:
+  lin_size: 64
+  ff: yes
+  ensemble:
+    full: yes
+    B: 9
+
+er:
+  priority: var  # (uni, tde, var)
+  alpha: 1.0    # when this field is not None a PER is built.
+  beta: null
+  capacity: 100_000
+  batch_size: 32
+  hist_len: 2
+  async_memory: no
+  bootstrap_args: [-1, 0.5]
+
+exploration:
+  name: linear
+  start: 1.0
+  end: 0.1
+  steps: 100_000
+
+device: cuda
