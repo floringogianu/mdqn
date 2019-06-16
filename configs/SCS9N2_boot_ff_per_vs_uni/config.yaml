@@ -1,6 +1,6 @@
-priority: [var, uni]
 
 er:
+  priority: [var, uni]
   alpha: [1.0]
   beta: [null, 0.2]
   bootstrap_args: [[-1, 0.5], [-1, 0.9]]
