@@ -146,12 +146,12 @@ def augment_options(opt):
 def check_options_are_valid(opt):
     """ Checks if experiment configuration is consistent.
     """
-    if opt.er.alpha is None:
+    if hasattr(opt.er, "alpha") and opt.er.alpha is None:
         assert (
             opt.er.priority == "uni"
         ), "Priority can only be uniform if \
             `opt.er.alpha` is None"
-    else:
+    elif hasattr(opt.er, "alpha"):
         assert opt.er.priority in (
             "tde",
             "var",
