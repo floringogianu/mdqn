@@ -10,9 +10,7 @@ from numpy import random
 
 import rlog
 from liftoff import parse_opts
-from wintermute.policy_evaluation import EpsilonGreedyPolicy
-from wintermute.policy_improvement import DQNPolicyImprovement
-from wintermute.replay import ExperienceReplay
+import wintermute as wt
 
 from src.models import (
     MiniGridNet,
@@ -41,8 +39,17 @@ def test(opt, estimator, crt_step):
             epsilon={"name": "constant", "start": 0.01},
             vote=True,
         )
+    elif hasattr(opt.estimator, "categorical"):
+        _s = opt.estimator.categorical.support
+        support = [_s.min, _s.max, _s.bin_no]
+        policy = wt.EpsilonGreedyPolicy(
+            estimator,
+            env.action_space.n,
+            epsilon={"name": "constant", "start": 0.01},
+            policy=wt.CategoricalDeterministicPolicy(estimator, support),
+        )
     else:
-        policy = EpsilonGreedyPolicy(
+        policy = wt.EpsilonGreedyPolicy(
             estimator,
             env.action_space.n,
             epsilon={"name": "constant", "start": 0.01},
@@ -171,9 +178,10 @@ def run(opt):
 
     rlog.info(f"\n{config_to_string(opt)}")
 
-    # configure the Environment and the Policy
+    # configure the environment
     env = wrap_env(gym.make(opt.game), opt)
 
+    # configure estimator and policy
     if opt.estimator.ff:
         estimator = MiniGridFF(
             opt.er.hist_len * 3,
@@ -222,11 +230,32 @@ def run(opt):
             opt.gamma,
             is_double=opt.double,
         )
+    elif hasattr(opt.estimator, "categorical"):
+        _s = opt.estimator.categorical.support
+        support = [_s.min, _s.max, _s.bin_no]
+        estimator = MiniGridFF(
+            opt.er.hist_len * 3,
+            env.action_space.n,
+            hidden_size=opt.estimator.lin_size,
+            bin_no=opt.estimator.categorical.support.bin_no,
+        ).cuda()
+        policy_evaluation = wt.EpsilonGreedyPolicy(
+            estimator,
+            env.action_space.n,
+            epsilon=opt.exploration.__dict__,
+            policy=wt.CategoricalDeterministicPolicy(estimator, support),
+        )
+        policy_improvement = wt.CategoricalPolicyImprovement(
+            estimator,
+            optim.Adam(estimator.parameters(), lr=opt.lr, eps=1e-4),
+            opt.gamma,
+            support,
+        )
     else:
-        policy_evaluation = EpsilonGreedyPolicy(
+        policy_evaluation = wt.EpsilonGreedyPolicy(
             estimator, env.action_space.n, epsilon=opt.exploration.__dict__
         )
-        policy_improvement = DQNPolicyImprovement(
+        policy_improvement = wt.DQNPolicyImprovement(
             estimator,
             optim.Adam(estimator.parameters(), lr=opt.lr, eps=1e-4),
             opt.gamma,
@@ -236,7 +265,7 @@ def run(opt):
     policy = DQNPolicy(
         policy_evaluation,
         policy_improvement,
-        ExperienceReplay(**opt.er.__dict__)(),
+        wt.ExperienceReplay(**opt.er.__dict__)(),
         priority=opt.er.priority,
     )
 

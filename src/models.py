@@ -42,18 +42,34 @@ def init_weights(module):
 
 
 class MiniGridFF(nn.Module):
-    def __init__(self, in_channels, action_no, hidden_size=64):
+    def __init__(self, in_channels, action_no, hidden_size=64, bin_no=1):
         super(MiniGridFF, self).__init__()
+        self.bin_no = bin_no
+        self.action_no = action_no
         self.lin0 = nn.Linear(in_channels * 7 * 7, hidden_size)
-        self.lin1 = nn.Linear(hidden_size, action_no)
-    
+        self.lin1 = nn.Linear(hidden_size, action_no * bin_no)
+        assert bin_no > 0, "No of bins can't be smaller than 1"
+        self.reset_parameters()
+
     def forward(self, x):
         assert (
             x.dtype == torch.uint8
         ), "The model expects states of type ByteTensor."
         x = x.float().div_(255)
         x = x.view(x.shape[0], -1)
-        return self.lin1(F.relu(self.lin0(x)))
+        y = self.lin1(F.relu(self.lin0(x)))
+        if self.bin_no > 1:
+            # distributional RL
+            logits = y.view(x.shape[0], self.action_no, self.bin_no)
+            return torch.softmax(logits, dim=2)
+        # simply return the Q-values
+        return y
+
+    def reset_parameters(self):
+        """ Reinitializez parameters to Xavier Uniform for all layers and
+            0 bias.
+        """
+        self.apply(init_weights)
 
 
 class MiniGridNet(nn.Module):
