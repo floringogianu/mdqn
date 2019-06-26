@@ -19,8 +19,8 @@ estimator:
   ff: true
 
 er:
-  priority: tde
-  alpha: .95  # when this field is not None a PER is built.
+  priority: tde  # uni, tde, var
+  alpha: 0.95  # when this field is not None a PER is built.
   beta: null
   capacity: 100_000
   batch_size: 32
