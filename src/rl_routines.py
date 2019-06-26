@@ -146,7 +146,8 @@ class Episode:
         if self.__done:
             raise StopIteration
 
-        pi = self.policy.act(self.__state)
+        with torch.no_grad():
+            pi = self.policy.act(self.__state)
         _state, _action = self.__state.clone(), pi.action
         self.__state, reward, self.__done, _ = self.env.step(pi.action)
 
