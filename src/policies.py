@@ -4,9 +4,7 @@ from functools import partial
 from typing import NamedTuple
 import torch
 from numpy import random
-from wintermute.policy_evaluation import EpsilonGreedyPolicy
-from wintermute.policy_improvement import DQNPolicyImprovement, get_dqn_loss
-from wintermute.policy_evaluation import get_epsilon_schedule
+import wintermute as wt
 from src.models import BootstrappedEstimator, MiniGridNet
 
 
@@ -25,7 +23,7 @@ class BayesianDQNLoss(NamedTuple):
     mc_sample_losses: list  # list of DQNLosses for each MC sample.
 
 
-class DropPE(EpsilonGreedyPolicy):
+class DropPE(wt.EpsilonGreedyPolicy):
     """ Policy-Evaluation for Dropout-SVI estimators.
 
         It has two exploration modes:
@@ -59,14 +57,14 @@ class DropPE(EpsilonGreedyPolicy):
         return f"DropPolicyEvaluation(thompson={self._thompson})"
 
 
-class DropPI(DQNPolicyImprovement):
+class DropPI(wt.DQNPolicyImprovement):
     """ Policy Improvement for Dropout-SVI estimator.
     """
 
     def __call__(self, batch, cb=None):
         batch = [el.to(self.device) for el in batch]
 
-        dqn_loss = get_dqn_loss(
+        dqn_loss = wt.get_dqn_loss(
             batch,
             self.estimator,
             self.gamma,
@@ -104,18 +102,14 @@ class BootstrappedPE:
         self.__vote = vote
         self.__ensemble_sz = len(self.__estimator)
         self.policy = self
-        params = estimator.parameters()
-        try:
-            self.__device = next(params).device
-        except TypeError:
-            self.__device = next(params[0]["params"]).device
+        self.__device = wt.get_estimator_device(estimator)
 
         self.action_no = action_no
         self.epsilon = epsilon
         try:
             epsilon = next(self.epsilon)
         except TypeError:
-            self.epsilon = get_epsilon_schedule(**self.epsilon)
+            self.epsilon = wt.get_epsilon_schedule(**self.epsilon)
             epsilon = next(self.epsilon)
 
         # TODO: Most likely this policy evaluation step is not working
@@ -186,7 +180,7 @@ class BootstrappedPE:
         return self.__estimator
 
 
-class BootstrappedPI(DQNPolicyImprovement):
+class BootstrappedPI(wt.DQNPolicyImprovement):
     r""" Object doing DQN Policy improvement step with a Bootstrapped
     Ensemble estimator.
     """
@@ -241,7 +235,7 @@ class BootstrappedPI(DQNPolicyImprovement):
         # Gather the losses for each batch and ensemble component. We use
         # partial application to set which ensemble component gets trained.
         dqn_losses = [
-            get_dqn_loss(
+            wt.get_dqn_loss(
                 batch_,
                 partial(self.estimator, mid=mid),
                 self.gamma,
@@ -268,7 +262,7 @@ def main():
     B, bsz = 11, 7
     prototype = MiniGridNet(6, 4)
     ensemble = BootstrappedEstimator(prototype, B=B)
-    policy = EpsilonGreedyPolicy(
+    policy = wt.EpsilonGreedyPolicy(
         ensemble, 4, {"start": 1.0, "end": 0.1, "steps": 1000}
     )
 
