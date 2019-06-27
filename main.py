@@ -130,8 +130,11 @@ def augment_options(opt):
         for the setup of the experiment.
     """
     # set the experiment name
+    game = f"{''.join(opt.game.split('-')[1:-1])}"
+    game = "".join(list(filter(lambda x: x.isupper() or x.isnumeric(), game)))
+    algo = "C51" if hasattr(opt.estimator, 'categorical') else "DQN"
     if "experiment" not in opt.__dict__:
-        opt.experiment = f"{''.join(opt.game.split('-')[1:-1])}-DQN"
+        opt.experiment = f"{game}-{algo}"
     # sample a number of seeds so that we can limit the no of
     # maze configurations
     if isinstance(opt.seed, str):
