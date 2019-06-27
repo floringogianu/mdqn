@@ -2,6 +2,7 @@
 """
 from functools import partial
 import torch
+from wintermute.utils import CategoricalLoss, DQNLoss
 
 
 def priority_update(mem, idxs, weights, dqn_loss, variances=None):
@@ -10,11 +11,13 @@ def priority_update(mem, idxs, weights, dqn_loss, variances=None):
     """
     losses = dqn_loss.loss
 
+    # Prioritize by variance
     if variances is not None:
         # print("var: \n", variances.mean())
         mem.update(idxs, [var.item() for var in variances.detach()])
         return (losses * weights.to(losses.device).view_as(losses)).mean()
 
+    # Prioritize by |TD-err| of a Monte-Carlo sampling of the posterior
     if hasattr(dqn_loss, "mc_sample_losses"):
         # take |td-error| of each mc sample loss and average them
         with torch.no_grad():
@@ -25,9 +28,17 @@ def priority_update(mem, idxs, weights, dqn_loss, variances=None):
                 ],
                 0,
             ).mean(0)
-    else:
+    # Prioritize by |TD-err|
+    elif isinstance(dqn_loss, CategoricalLoss):
+        td_errors = losses.detach()
+    elif isinstance(dqn_loss, DQNLoss):
         with torch.no_grad():
             td_errors = (dqn_loss.qsa_targets - dqn_loss.qsa).detach().abs()
+    else:
+        raise (
+            "Weird corner case: the loss is neither a Categorical, a DQN,"
+            + " or something else..."
+        )
 
     # print(f"tde: {td_errors.shape}\n", td_errors.squeeze())
     mem.update(idxs, [td.item() for td in td_errors])
@@ -122,7 +133,7 @@ class DQNPolicy:
             self.policy_evaluation,
             self.policy_improvement,
             self.experience_replay,
-            f"priority={self.__priority}"
+            f"priority={self.__priority}",
         )
 
 
