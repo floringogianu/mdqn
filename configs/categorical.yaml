@@ -26,8 +26,8 @@ estimator:
       bin_no: 51
 
 er:
-  priority: tde  # uni, tde, var
-  alpha: 0.7  # when this field is not None a PER is built.
+  priority: uni  # uni, tde, var
+  alpha: null  # when this field is not None a PER is built.
   beta: null
   capacity: 100_000
   batch_size: 32
