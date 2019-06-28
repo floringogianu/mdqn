@@ -280,10 +280,12 @@ class BootstrappedPI:
 
         # sum up the losses of a given transition across ensemble components
         dqn_loss = torch.zeros((bsz, 1), device=dqn_losses[0].loss.device)
+        counts = torch.ones((bsz, 1), device=dqn_losses[0].loss.device)
         for loss, (mid, _, _) in zip(dqn_losses, batches):
+            counts += boot_masks[mid].unsqueeze(1).float()
             dqn_loss[boot_masks[mid]] += loss.loss
 
-        # TODO: gradient rescalling!!!
+        dqn_loss /= counts
         return BayesianDQNLoss(loss=dqn_loss, mc_sample_losses=dqn_losses)
 
     def __get_dqn_loss(self, batches, boot_masks):
