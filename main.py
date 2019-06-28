@@ -150,14 +150,13 @@ def check_options_are_valid(opt):
     if hasattr(opt.er, "alpha") and opt.er.alpha is None:
         assert (
             opt.er.priority == "uni"
-        ), "Priority can only be uniform if \
-            `opt.er.alpha` is None"
+        ), "Priority can only be uniform if `opt.er.alpha` is None"
     elif hasattr(opt.er, "alpha"):
         assert opt.er.priority in (
             "tde",
             "var",
-        ), "Priority cannot be uniform \
-            if `opt.er.alpha` has a value."
+            "bal",
+        ), "Priority cannot be uniform if `opt.er.alpha` has a value."
     if hasattr(opt.estimator, "ensemble"):
         assert (
             opt.er.bootstrap_args[0] == opt.estimator.ensemble.B

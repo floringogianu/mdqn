@@ -192,6 +192,9 @@ class BootstrappedEstimator(nn.Module):
         self.__bno = B
         self.reset_parameters()
 
+    def feature_extractor(self, x):
+        return self.__features(x)
+
     def forward(self, x, mid=None, **kwargs):
         """ In training mode, when `mid` is provided, do an inference step
             through the ensemble component indicated by `mid`. Otherwise it
@@ -204,21 +207,11 @@ class BootstrappedEstimator(nn.Module):
         Returns:
             torch.tensor: the mean of the ensemble predictions.
         """
-        if x.ndimension() == 5:
-            x = x.view(x.shape[0], x.shape[1] * x.shape[2], 7, 7)
-
-        if x.ndimension() == 4 and self.__features is not None:
-            x = self.__features(x)
-            x = x.view(x.size(0), -1)
-        elif x.ndimension() != 2 and self.__features is not None:
-            raise RuntimeError(f"Received a strange input: {x.shape}")
+        x = self.__prep_inputs(x)
 
         if mid is not None:
             return self.__ensemble[mid](x, **kwargs)
         return torch.stack([model(x) for model in self.__ensemble], 0)
-
-    def feature_extractor(self, x):
-        return self.__features(x)
 
     def var(self, x, action=None):
         """ Returns the variance (uncertainty) of the ensemble's prediction
@@ -232,6 +225,29 @@ class BootstrappedEstimator(nn.Module):
         Returns:
             var: the uncertainty of the ensemble when predicting `f(x)`.
         """
+        x = self.__prep_inputs(x)
+
+        with torch.no_grad():
+            ys = [model(x) for model in self.__ensemble]
+
+        if action is not None:
+            return torch.stack(ys, 0).var(0)[0][action]
+        return torch.stack(ys, 0).var(0)
+
+    def entropy_decrease(self, x):
+        x = self.__prep_inputs(x)
+
+        with torch.no_grad():
+            ys = torch.stack(
+                [model(x, probs=True) for model in self.__ensemble], 0
+            )
+
+        ys_mc = ys.mean(0)
+        entropy = -(ys_mc * torch.log(ys_mc)).sum(2)
+        exp_entropy = -(ys * torch.log(ys)).sum(3).mean(0)
+        return entropy - exp_entropy
+
+    def __prep_inputs(self, x):
         if x.ndimension() == 5:
             x = x.view(x.shape[0], x.shape[1] * x.shape[2], 7, 7)
 
@@ -240,13 +256,7 @@ class BootstrappedEstimator(nn.Module):
             x = x.view(x.size(0), -1)
         elif x.ndimension() != 2 and self.__features is not None:
             raise RuntimeError(f"Received a strange input: {x.shape}")
-
-        with torch.no_grad():
-            ys = [model(x) for model in self.__ensemble]
-
-        if action is not None:
-            return torch.stack(ys, 0).var(0)[0][action]
-        return torch.stack(ys, 0).var(0)
+        return x
 
     def parameters(self, recurse=True):
         """ Groups the ensemble parameters so that the optimizer can keep
@@ -262,7 +272,7 @@ class BootstrappedEstimator(nn.Module):
             0 bias.
         """
         self.apply(init_weights)
-    
+
     @property
     def support(self):
         return self.__ensemble[0].support

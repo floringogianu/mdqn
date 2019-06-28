@@ -162,6 +162,15 @@ class BootstrappedPE:
         if actions is not None:
             return qval_vars.gather(1, actions)
         return qval_vars
+    
+    def entropy_decrease(self, states, actions=None):
+        """ Return H - E_w[H]
+        """
+        with torch.no_grad():
+            entropy_diffs = self.estimator.entropy_decrease(states)
+        if actions is not None:
+            return entropy_diffs.gather(1, actions)
+        return entropy_diffs
 
     def __call__(self, state):
         return self.act(state)
