@@ -42,16 +42,19 @@ def init_weights(module):
 
 
 class MiniGridFF(nn.Module):
-    def __init__(self, in_channels, action_no, hidden_size=64, bin_no=1):
+    def __init__(self, in_channels, action_no, hidden_size=64, support=None):
         super(MiniGridFF, self).__init__()
-        self.bin_no = bin_no
+        self.bin_no = 1
+        if support is not None:
+            self.min, self.max, self.bin_no = support
+            self.support = torch.linspace(*support)
         self.action_no = action_no
         self.lin0 = nn.Linear(in_channels * 7 * 7, hidden_size)
-        self.lin1 = nn.Linear(hidden_size, action_no * bin_no)
-        assert bin_no > 0, "No of bins can't be smaller than 1"
+        self.lin1 = nn.Linear(hidden_size, action_no * self.bin_no)
+        assert self.bin_no > 0, "No of bins can't be smaller than 1"
         self.reset_parameters()
 
-    def forward(self, x):
+    def forward(self, x, probs=False):
         assert (
             x.dtype == torch.uint8
         ), "The model expects states of type ByteTensor."
@@ -61,7 +64,10 @@ class MiniGridFF(nn.Module):
         if self.bin_no > 1:
             # distributional RL
             logits = y.view(x.shape[0], self.action_no, self.bin_no)
-            return torch.softmax(logits, dim=2)
+            qs_probs = torch.softmax(logits, dim=2)
+            if probs:
+                return qs_probs
+            return torch.mul(qs_probs, self.support.expand_as(qs_probs)).sum(2)
         # simply return the Q-values
         return y
 
@@ -70,6 +76,20 @@ class MiniGridFF(nn.Module):
             0 bias.
         """
         self.apply(init_weights)
+
+    def cuda(self, device=None):
+        try:
+            self.support = self.support.cuda(device)
+        except AttributeError:
+            pass
+        return super().cuda(device)
+
+    def cpu(self):
+        try:
+            self.support = self.support.cpu()
+        except AttributeError:
+            pass
+        return super().cpu()
 
 
 class MiniGridNet(nn.Module):
@@ -172,7 +192,7 @@ class BootstrappedEstimator(nn.Module):
         self.__bno = B
         self.reset_parameters()
 
-    def forward(self, x, mid=None):
+    def forward(self, x, mid=None, **kwargs):
         """ In training mode, when `mid` is provided, do an inference step
             through the ensemble component indicated by `mid`. Otherwise it
             returns the mean of the predictions of the ensemble.
@@ -194,7 +214,7 @@ class BootstrappedEstimator(nn.Module):
             raise RuntimeError(f"Received a strange input: {x.shape}")
 
         if mid is not None:
-            return self.__ensemble[mid](x)
+            return self.__ensemble[mid](x, **kwargs)
         return torch.stack([model(x) for model in self.__ensemble], 0)
 
     def feature_extractor(self, x):
@@ -242,6 +262,10 @@ class BootstrappedEstimator(nn.Module):
             0 bias.
         """
         self.apply(init_weights)
+    
+    @property
+    def support(self):
+        return self.__ensemble[0].support
 
     @property
     def has_feature_extractor(self):

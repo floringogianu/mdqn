@@ -39,15 +39,6 @@ def test(opt, estimator, crt_step):
             epsilon={"name": "constant", "start": 0.01},
             vote=True,
         )
-    elif hasattr(opt.estimator, "categorical"):
-        _s = opt.estimator.categorical.support
-        support = [_s.min, _s.max, _s.bin_no]
-        policy = wt.EpsilonGreedyPolicy(
-            estimator,
-            env.action_space.n,
-            epsilon={"name": "constant", "start": 0.01},
-            policy=wt.CategoricalDeterministicPolicy(estimator, support),
-        )
     else:
         policy = wt.EpsilonGreedyPolicy(
             estimator,
@@ -132,7 +123,7 @@ def augment_options(opt):
     # set the experiment name
     game = f"{''.join(opt.game.split('-')[1:-1])}"
     game = "".join(list(filter(lambda x: x.isupper() or x.isnumeric(), game)))
-    algo = "C51" if hasattr(opt.estimator, 'categorical') else "DQN"
+    algo = "C51" if hasattr(opt.estimator, "categorical") else "DQN"
     if "experiment" not in opt.__dict__:
         opt.experiment = f"{game}-{algo}"
     # sample a number of seeds so that we can limit the no of
@@ -185,7 +176,16 @@ def run(opt):
     env = wrap_env(gym.make(opt.game), opt)
 
     # configure estimator and policy
-    if opt.estimator.ff:
+    if hasattr(opt.estimator, 'categorical'):
+        _s = opt.estimator.categorical.support
+        support = [_s.min, _s.max, _s.bin_no]
+        estimator = MiniGridFF(
+            opt.er.hist_len * 3,
+            env.action_space.n,
+            hidden_size=opt.estimator.lin_size,
+            support=support,
+        ).cuda()
+    elif opt.estimator.ff:
         estimator = MiniGridFF(
             opt.er.hist_len * 3,
             env.action_space.n,
@@ -206,12 +206,24 @@ def run(opt):
         policy_evaluation = BootstrappedPE(
             estimator, env.action_space.n, opt.exploration.__dict__, vote=True
         )
-        policy_improvement = BootstrappedPI(
-            estimator,
-            optim.Adam(estimator.parameters(), lr=opt.lr, eps=1e-4),
-            opt.gamma,
-            is_double=opt.double,
-        )
+        if hasattr(opt.estimator, 'categorical'):
+            policy_improvement = BootstrappedPI(
+                wt.CategoricalPolicyImprovement(
+                    estimator,
+                    optim.Adam(estimator.parameters(), lr=opt.lr, eps=1e-4),
+                    opt.gamma,
+                ),
+                categorical=True
+            )
+        else:
+            policy_improvement = BootstrappedPI(
+                wt.DQNPolicyImprovement(
+                    estimator,
+                    optim.Adam(estimator.parameters(), lr=opt.lr, eps=1e-4),
+                    opt.gamma,
+                    is_double=opt.double,
+                )
+            )
     elif hasattr(opt.estimator, "dropout"):
         # Build Variational Dropout objects
         estimator = MiniGridDropnet(
@@ -234,25 +246,13 @@ def run(opt):
             is_double=opt.double,
         )
     elif hasattr(opt.estimator, "categorical"):
-        _s = opt.estimator.categorical.support
-        support = [_s.min, _s.max, _s.bin_no]
-        estimator = MiniGridFF(
-            opt.er.hist_len * 3,
-            env.action_space.n,
-            hidden_size=opt.estimator.lin_size,
-            bin_no=opt.estimator.categorical.support.bin_no,
-        ).cuda()
         policy_evaluation = wt.EpsilonGreedyPolicy(
-            estimator,
-            env.action_space.n,
-            epsilon=opt.exploration.__dict__,
-            policy=wt.CategoricalDeterministicPolicy(estimator, support),
+            estimator, env.action_space.n, epsilon=opt.exploration.__dict__
         )
         policy_improvement = wt.CategoricalPolicyImprovement(
             estimator,
             optim.Adam(estimator.parameters(), lr=opt.lr, eps=1e-4),
             opt.gamma,
-            support,
         )
     else:
         policy_evaluation = wt.EpsilonGreedyPolicy(
