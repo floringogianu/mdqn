@@ -4,9 +4,7 @@ from functools import partial
 from typing import NamedTuple
 import torch
 from numpy import random
-from wintermute.policy_evaluation import EpsilonGreedyPolicy
-from wintermute.policy_improvement import DQNPolicyImprovement, get_dqn_loss
-from wintermute.policy_evaluation import get_epsilon_schedule
+import wintermute as wt
 from src.models import BootstrappedEstimator, MiniGridNet
 
 
@@ -25,7 +23,7 @@ class BayesianDQNLoss(NamedTuple):
     mc_sample_losses: list  # list of DQNLosses for each MC sample.
 
 
-class DropPE(EpsilonGreedyPolicy):
+class DropPE(wt.EpsilonGreedyPolicy):
     """ Policy-Evaluation for Dropout-SVI estimators.
 
         It has two exploration modes:
@@ -59,14 +57,14 @@ class DropPE(EpsilonGreedyPolicy):
         return f"DropPolicyEvaluation(thompson={self._thompson})"
 
 
-class DropPI(DQNPolicyImprovement):
+class DropPI(wt.DQNPolicyImprovement):
     """ Policy Improvement for Dropout-SVI estimator.
     """
 
     def __call__(self, batch, cb=None):
         batch = [el.to(self.device) for el in batch]
 
-        dqn_loss = get_dqn_loss(
+        dqn_loss = wt.get_dqn_loss(
             batch,
             self.estimator,
             self.gamma,
@@ -75,10 +73,7 @@ class DropPI(DQNPolicyImprovement):
             loss_fn=self.loss_fn,
         )
 
-        loss = BayesianDQNLoss(
-            loss=dqn_loss.loss,
-            mc_sample_losses=[dqn_loss],
-        )
+        loss = BayesianDQNLoss(loss=dqn_loss.loss, mc_sample_losses=[dqn_loss])
 
         if cb:
             loss = cb(loss)
@@ -104,27 +99,23 @@ class BootstrappedPE:
         self.__vote = vote
         self.__ensemble_sz = len(self.__estimator)
         self.policy = self
-        params = estimator.parameters()
-        try:
-            self.__device = next(params).device
-        except TypeError:
-            self.__device = next(params[0]["params"]).device
+        self.__device = wt.get_estimator_device(estimator)
 
         self.action_no = action_no
         self.epsilon = epsilon
         try:
             epsilon = next(self.epsilon)
         except TypeError:
-            self.epsilon = get_epsilon_schedule(**self.epsilon)
+            self.epsilon = wt.get_epsilon_schedule(**self.epsilon)
             epsilon = next(self.epsilon)
 
         # TODO: Most likely this policy evaluation step is not working
         # with batches. Need to test.
 
         # self._get_variance = eval(var_method + "_variance")
-        self.act = self.__voting_action if vote else self.__mean_action
+        self.act = self.__most_voted if vote else self.__mean_value
 
-    def __mean_action(self, state):
+    def __mean_value(self, state):
         state = state.to(self.__device)
         ensemble_qvals = self.__estimator(state).squeeze(1)
         qvals = ensemble_qvals.mean(0)
@@ -142,7 +133,7 @@ class BootstrappedPE:
             action=action, q_value=qval.item(), full=ensemble_qvals
         )
 
-    def __voting_action(self, state):
+    def __most_voted(self, state):
         state = state.to(self.__device)
         ensemble_qvals = self.__estimator(state).squeeze(1)
         act_no = ensemble_qvals.shape[1]
@@ -171,6 +162,15 @@ class BootstrappedPE:
         if actions is not None:
             return qval_vars.gather(1, actions)
         return qval_vars
+    
+    def entropy_decrease(self, states, actions=None):
+        """ Return H - E_w[H]
+        """
+        with torch.no_grad():
+            entropy_diffs = self.estimator.entropy_decrease(states)
+        if actions is not None:
+            return entropy_diffs.gather(1, actions)
+        return entropy_diffs
 
     def __call__(self, state):
         return self.act(state)
@@ -186,27 +186,58 @@ class BootstrappedPE:
         return self.__estimator
 
 
-class BootstrappedPI(DQNPolicyImprovement):
+def split_batch(batch, boot_masks):
+    """ Split batch in mini-batches for each ensemble component. because now
+    state and state_ have differen dimensions we cannot do: batches =
+    [[el[bm] for el in batch] for bm in boot_masks] instead we mask the
+    bootmask too... :(
+
+    Args:
+        batch (list<torch.tensor>): The classic batch.
+        boot_masks (torch.tensor): A K*batch_size mask telling which transition
+            is used by each ensemble component for learning from.
+
+    Returns:
+        [list]: A list of mini-batches.
+    """
+
+    batches = []
+    for mid, bmask in enumerate(boot_masks):
+        if bmask.sum() > 0:
+            batches.append(
+                (
+                    mid,
+                    [
+                        batch[0][bmask],
+                        batch[1][bmask],
+                        batch[2][bmask],
+                        batch[3][bmask[batch[4].squeeze()]],
+                        batch[4][bmask],
+                    ],
+                    bmask[batch[4].squeeze()],
+                )
+            )
+    return batches
+
+
+class BootstrappedPI:
     r""" Object doing DQN Policy improvement step with a Bootstrapped
     Ensemble estimator.
     """
 
+    def __init__(self, delegate, categorical=False):
+        self.__delegate = delegate
+        self.categorical = categorical
+        self.__get_loss = (
+            self.__get_categorical if categorical else self.__get_dqn_loss
+        )
+
     def __call__(self, batch, cb=None):
-        dqn_loss = self.__get_dqn_loss(batch)
 
-        if cb:
-            loss = cb(dqn_loss)
-        else:
-            loss = dqn_loss.loss.mean()
-
-        loss.backward()
-        self.update_estimator()
-
-    def __get_dqn_loss(self, batch):
+        batch = wt.to_device(batch, self.device)
         batch, boot_masks = batch
         bsz, bsz_ = batch[0].shape[0], batch[3].shape[0]
-        batch = [el.to(self.device) for el in batch]
-        boot_masks.to(self.device)
+
         # pass through the feature extractor and replace states
         # with features. Also pass next_states once more if Double-DQN.
         if self.estimator.has_feature_extractor:
@@ -217,31 +248,53 @@ class BootstrappedPI(DQNPolicyImprovement):
             #     with torch.no_grad():
             #         features_ = online(batch[3])
             batch[3] = target(batch[3]).view(bsz_, -1)
-        # split batch in mini-batches for each ensemble component.
-        # because now state and state_ have differen dimensions we cannot do:
-        # batches = [[el[bm] for el in batch] for bm in boot_masks]
-        # instead we mask the bootmask too... :(
-        batches = []
-        for mid, bmask in enumerate(boot_masks):
-            if bmask.sum() > 0:
-                batches.append(
-                    (
-                        mid,
-                        [
-                            batch[0][bmask],
-                            batch[1][bmask],
-                            batch[2][bmask],
-                            batch[3][bmask[batch[4].squeeze()]],
-                            batch[4][bmask],
-                        ],
-                        bmask[batch[4].squeeze()],
-                    )
-                )
+
+        # split batch in smaller batches for each ensemble component.
+        batches = split_batch(batch, boot_masks)
+
+        dqn_loss = self.__get_loss(batches, boot_masks)
+
+        if cb:
+            loss = cb(dqn_loss)
+        else:
+            loss = dqn_loss.loss.mean()
+
+        loss.backward()
+        self.update_estimator()
+
+    def __get_categorical(self, batches, boot_masks):
+        bsz = boot_masks.shape[1]
 
         # Gather the losses for each batch and ensemble component. We use
         # partial application to set which ensemble component gets trained.
         dqn_losses = [
-            get_dqn_loss(
+            wt.get_categorical_loss(
+                batch_,
+                partial(self.estimator, mid=mid),
+                self.gamma,
+                self.support,
+                target_estimator=partial(self.target_estimator, mid=mid),
+            )
+            for mid, batch_, next_state_mask in batches
+        ]
+
+        # sum up the losses of a given transition across ensemble components
+        dqn_loss = torch.zeros((bsz, 1), device=dqn_losses[0].loss.device)
+        counts = torch.ones((bsz, 1), device=dqn_losses[0].loss.device)
+        for loss, (mid, _, _) in zip(dqn_losses, batches):
+            counts += boot_masks[mid].unsqueeze(1).float()
+            dqn_loss[boot_masks[mid]] += loss.loss
+
+        dqn_loss /= counts
+        return BayesianDQNLoss(loss=dqn_loss, mc_sample_losses=dqn_losses)
+
+    def __get_dqn_loss(self, batches, boot_masks):
+        bsz = boot_masks.shape[1]
+
+        # Gather the losses for each batch and ensemble component. We use
+        # partial application to set which ensemble component gets trained.
+        dqn_losses = [
+            wt.get_dqn_loss(
                 batch_,
                 partial(self.estimator, mid=mid),
                 self.gamma,
@@ -258,17 +311,17 @@ class BootstrappedPI(DQNPolicyImprovement):
             dqn_loss[boot_masks[mid]] += loss.loss
 
         # TODO: gradient rescalling!!!
-        return BayesianDQNLoss(
-            loss=dqn_loss,
-            mc_sample_losses=dqn_losses,
-        )
+        return BayesianDQNLoss(loss=dqn_loss, mc_sample_losses=dqn_losses)
+
+    def __getattr__(self, name):
+        return getattr(self.__delegate, name)
 
 
 def main():
     B, bsz = 11, 7
     prototype = MiniGridNet(6, 4)
     ensemble = BootstrappedEstimator(prototype, B=B)
-    policy = EpsilonGreedyPolicy(
+    policy = wt.EpsilonGreedyPolicy(
         ensemble, 4, {"start": 1.0, "end": 0.1, "steps": 1000}
     )
 
@@ -278,10 +331,12 @@ def main():
     print(ensemble.var(x, 2))
 
     policy_improvement = BootstrappedPI(
-        ensemble,
-        torch.optim.Adam(ensemble.parameters(), lr=0.00235),
-        0.92,
-        is_double=True,
+        wt.DQNPolicyImprovement(
+            ensemble,
+            torch.optim.Adam(ensemble.parameters(), lr=0.00235),
+            0.92,
+            is_double=True,
+        )
     )
 
     probs = torch.empty(B, bsz).fill_(0.5)

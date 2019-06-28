@@ -10,9 +10,7 @@ from numpy import random
 
 import rlog
 from liftoff import parse_opts
-from wintermute.policy_evaluation import EpsilonGreedyPolicy
-from wintermute.policy_improvement import DQNPolicyImprovement
-from wintermute.replay import ExperienceReplay
+import wintermute as wt
 
 from src.models import (
     MiniGridNet,
@@ -42,7 +40,7 @@ def test(opt, estimator, crt_step):
             vote=True,
         )
     else:
-        policy = EpsilonGreedyPolicy(
+        policy = wt.EpsilonGreedyPolicy(
             estimator,
             env.action_space.n,
             epsilon={"name": "constant", "start": 0.01},
@@ -123,8 +121,11 @@ def augment_options(opt):
         for the setup of the experiment.
     """
     # set the experiment name
+    game = f"{''.join(opt.game.split('-')[1:-1])}"
+    game = "".join(list(filter(lambda x: x.isupper() or x.isnumeric(), game)))
+    algo = "C51" if hasattr(opt.estimator, "categorical") else "DQN"
     if "experiment" not in opt.__dict__:
-        opt.experiment = f"{''.join(opt.game.split('-')[1:-1])}-DQN"
+        opt.experiment = f"{game}-{algo}"
     # sample a number of seeds so that we can limit the no of
     # maze configurations
     if isinstance(opt.seed, str):
@@ -149,14 +150,13 @@ def check_options_are_valid(opt):
     if hasattr(opt.er, "alpha") and opt.er.alpha is None:
         assert (
             opt.er.priority == "uni"
-        ), "Priority can only be uniform if \
-            `opt.er.alpha` is None"
+        ), "Priority can only be uniform if `opt.er.alpha` is None"
     elif hasattr(opt.er, "alpha"):
         assert opt.er.priority in (
             "tde",
             "var",
-        ), "Priority cannot be uniform \
-            if `opt.er.alpha` has a value."
+            "bal",
+        ), "Priority cannot be uniform if `opt.er.alpha` has a value."
     if hasattr(opt.estimator, "ensemble"):
         assert (
             opt.er.bootstrap_args[0] == opt.estimator.ensemble.B
@@ -171,10 +171,20 @@ def run(opt):
 
     rlog.info(f"\n{config_to_string(opt)}")
 
-    # configure the Environment and the Policy
+    # configure the environment
     env = wrap_env(gym.make(opt.game), opt)
 
-    if opt.estimator.ff:
+    # configure estimator and policy
+    if hasattr(opt.estimator, 'categorical'):
+        _s = opt.estimator.categorical.support
+        support = [_s.min, _s.max, _s.bin_no]
+        estimator = MiniGridFF(
+            opt.er.hist_len * 3,
+            env.action_space.n,
+            hidden_size=opt.estimator.lin_size,
+            support=support,
+        ).cuda()
+    elif opt.estimator.ff:
         estimator = MiniGridFF(
             opt.er.hist_len * 3,
             env.action_space.n,
@@ -195,12 +205,24 @@ def run(opt):
         policy_evaluation = BootstrappedPE(
             estimator, env.action_space.n, opt.exploration.__dict__, vote=True
         )
-        policy_improvement = BootstrappedPI(
-            estimator,
-            optim.Adam(estimator.parameters(), lr=opt.lr, eps=1e-4),
-            opt.gamma,
-            is_double=opt.double,
-        )
+        if hasattr(opt.estimator, 'categorical'):
+            policy_improvement = BootstrappedPI(
+                wt.CategoricalPolicyImprovement(
+                    estimator,
+                    optim.Adam(estimator.parameters(), lr=opt.lr, eps=1e-4),
+                    opt.gamma,
+                ),
+                categorical=True
+            )
+        else:
+            policy_improvement = BootstrappedPI(
+                wt.DQNPolicyImprovement(
+                    estimator,
+                    optim.Adam(estimator.parameters(), lr=opt.lr, eps=1e-4),
+                    opt.gamma,
+                    is_double=opt.double,
+                )
+            )
     elif hasattr(opt.estimator, "dropout"):
         # Build Variational Dropout objects
         estimator = MiniGridDropnet(
@@ -222,11 +244,20 @@ def run(opt):
             opt.gamma,
             is_double=opt.double,
         )
-    else:
-        policy_evaluation = EpsilonGreedyPolicy(
+    elif hasattr(opt.estimator, "categorical"):
+        policy_evaluation = wt.EpsilonGreedyPolicy(
             estimator, env.action_space.n, epsilon=opt.exploration.__dict__
         )
-        policy_improvement = DQNPolicyImprovement(
+        policy_improvement = wt.CategoricalPolicyImprovement(
+            estimator,
+            optim.Adam(estimator.parameters(), lr=opt.lr, eps=1e-4),
+            opt.gamma,
+        )
+    else:
+        policy_evaluation = wt.EpsilonGreedyPolicy(
+            estimator, env.action_space.n, epsilon=opt.exploration.__dict__
+        )
+        policy_improvement = wt.DQNPolicyImprovement(
             estimator,
             optim.Adam(estimator.parameters(), lr=opt.lr, eps=1e-4),
             opt.gamma,
@@ -236,7 +267,7 @@ def run(opt):
     policy = DQNPolicy(
         policy_evaluation,
         policy_improvement,
-        ExperienceReplay(**opt.er.__dict__)(),
+        wt.ExperienceReplay(**opt.er.__dict__)(),
         priority=opt.er.priority,
     )
 

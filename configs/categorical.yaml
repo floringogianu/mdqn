@@ -1,7 +1,9 @@
-game: "MiniGrid-SimpleCrossingS9N1-v0"
+# game: "MiniGrid-Dynamic-Obstacles-Random-6x6-v0"
+game: MiniGrid-SimpleCrossingS9N1-v0
+# game: MiniGrid-LavaCrossingS9N1-v0
 # either an int or a number of random seeds, ex.: r10 or r5
 # if seed: null then we train and test on all mdps.
-seed: r5
+seed: null
 
 train_steps: 2_000_000
 test_steps: 30000
@@ -9,7 +11,7 @@ test_render: no
 
 lr: 0.001
 gamma: 0.92
-double: True
+double: False
 start_learning: 10_000
 update_freq: 4
 target_update: 500
@@ -17,10 +19,15 @@ target_update: 500
 estimator:
   lin_size: 64
   ff: true
+  categorical:
+    support:
+      min: -3
+      max: 3
+      bin_no: 51
 
 er:
-  priority: tde  # uni, tde, var
-  alpha: 0.95  # when this field is not None a PER is built.
+  priority: uni  # uni, tde, var
+  alpha: null  # when this field is not None a PER is built.
   beta: null
   capacity: 100_000
   batch_size: 32

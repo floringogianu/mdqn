@@ -1,0 +1,250 @@
+% !TEX TS-program = pdflatex
+\documentclass[10pt,a4paper]{article} % KOMA-Script article scrartcl
+\usepackage[T1]{fontenc}
+
+\usepackage{bm,mathtools,amsmath,amssymb}
+\usepackage{url}
+\usepackage{xifthen}
+\usepackage[style=philosophy-modern,hyperref]{biblatex}
+\usepackage[style=arsclassica,parts=false,nochapters,eulermath]{classicthesis}
+% \usepackage[nochapters,beramono,eulermath,pdfspacing,listings]{classicthesis}
+% \usepackage{arsclassica}
+
+
+\bibliography{bibliography}
+
+\newcommand{\labday}[2]{\section{#2} \begin{flushright}#1\end{flushright}\bigskip}
+
+\DeclarePairedDelimiter{\sbr}{[}{]}
+\DeclarePairedDelimiter{\rbr}{(}{)}
+\DeclarePairedDelimiter{\norm}{\lVert}{\rVert}
+
+\newcommand{\btheta}{\bm{\theta}}
+\newcommand{\data}{\ensuremath{\mathcal{D}}}
+\newcommand{\posterior}{\ensuremath{p(\btheta \mid \data)}}
+\newcommand{\prior}{\ensuremath{p(\btheta)}}
+\newcommand{\argmax}[2]{\underset{#1}{\arg\!\max}\,#2}
+\newcommand{\argmin}[2]{\underset{#1}{\arg\!\min}\,#2}
+\newcommand{\entropy}[1]{\ensuremath{\mathbb{H} #1 }}
+\newcommand{\expected}[2]{\ensuremath{\mathbb{E}_{#1}{ #2 }}}
+
+% divergence [ . || . ]
+\DeclarePairedDelimiterX{\infdivx}[2]{[}{]}{%
+  #1\;\delimsize\|\;#2%
+}
+\newcommand{\KL}{KL\infdivx}
+
+% conditionals [ . | . ]
+\DeclarePairedDelimiterX{\condx}[2]{[}{]}{%
+  #1\mid#2%
+}
+\newcommand{\Entropy}{\mathbb{H}\condx}
+
+% automatic bracket size expectations
+\DeclarePairedDelimiterX{\br}[1]{[}{]}{#1}
+\newcommand{\Expected}[1][]{
+   \ifthenelse{\equal{#1}{}}{\mathbb{E}\br}{\mathbb{E}_{#1}\br}%
+}
+
+
+
+\begin{document}    % begin doc ------------------------------------------------
+\pagestyle{plain}
+\title{\rmfamily\normalfont\spacedallcaps{Theodon Project Notes}}
+\author{\spacedlowsmallcaps{Florin Gogianu, Tudor Berariu}}
+\date{} % no date
+
+\maketitle
+\begin{abstract}
+    \noindent
+    This document should work as a lab journal of sorts containing expositions
+    of the ideas being tested, experimental results and their interpretation.
+\end{abstract}
+\tableofcontents
+
+
+
+% ------------------------------------------------------------------------------
+\labday{Saturday, Jun 22, 2019}{Active Learning, the Bayesian way}
+\label{sec:bal}
+% ------------------------------------------------------------------------------
+
+\noindent
+In this note I will try to informally recall the origins of this research
+project and then focus on principled prioritization keys in Active Learning
+with a focus on Bayesian Active Learning.
+
+
+\subsection{How I came up with \textit{uncertainty}-based prioritization?}
+% ------------------------------------------------------------------------------
+
+I first came to think about novel prioritization schemes while reading the
+work done by \cite{mattar2018prioritized} on models explaining the different
+regimes of hippocampal replay. The authors argue that prioritizing
+experiences in a \texttt{DYNA} framework, based on a key composed of a
+\texttt{Gain} term measuring how much the expected return improves with the
+change in policy induced by learning from a given transition and a
+\texttt{Need} term which is the discounted number of times the agent is
+expected to visit a target state given the current state (think
+\textit{successor representations}), resulting in an
+$\texttt{ExpectedValueofBackup} = \texttt{Gain} \times \texttt{Need}$ measure.
+The interplay between these two terms, the authors argue, can model the
+disconnected observations of \textit{forward, backward} and \textit{offline
+replay} in a simulated spatial navigation task.
+
+At the time I was still thinking about replacing ER with a parametrized model
+and the work of \cite{mattar2018prioritized} seemed relevant. About the same
+time I was having the first contacts with the Posterior-Sampling RL
+literature for exploration
+\autocite{russo2017thompsonTutorial,osband2018randomized} and reproducing the
+various PER implementation so the idea of using the \textit{epistemic
+uncertainty} of the agent for selecting valuable transitions came naturally.
+\textbf{Basically it just seemed like a fun comparison}.
+
+But why the variance of the predictive distribution as a measure for the
+uncertainty of the agent? Well, in PSRL you usually don't compute explicitly
+the uncertainty of the estimator but rely on Thompson sampling to select at
+the beginning of each episode a policy from the posterior distribution
+according to the probability they are optimal -- in this setup exploration is
+guided by the variance of the sample policies \autocite{osband2013more}. So I
+did what every respectable researcher does: I turned to a blog post
+\autocite{gal2015what} I had in the back of my head for some time where I
+recall seeing a definition for the epistemic uncertainty of the a deep neural
+network -- the predictive variance of the model with parameters sampled from
+the posterior.
+
+
+\subsection{Getting formal?}
+% ------------------------------------------------------------------------------
+
+While seemingly fun and with some degree of empirical evidence, prioritizing
+experiences by their epistemic uncertainty isn't really theoretically sound.
+It can easily be seen that learning from the transition with the highest
+uncertainty we are not guaranteed that the new policy will lead to a higher
+expected return. However that is also the case with \texttt{TD-error}
+prioritization.
+
+Following \cite{Houlsby2011BayesianAL} we note that from a Bayesian
+perspective, identifying the best transitions to learn from means
+\emph{reducing the number of hypotheses as fast as possible}, which is
+another way of saying to reduce the entropy of the posterior distribution:
+
+\begin{equation*}
+   \argmin{\data}{\Entropy{\btheta}{\data}} = 
+        \int \posterior \log \posterior d\btheta.
+\end{equation*}
+
+This can be greedily approximated by finding the transition that maximises
+the decrease in expected posterior entropy:
+
+\begin{equation}
+   \argmax{\bm{x}}{\Entropy{\btheta}{\data}} - 
+   \Expected[y \sim p(y \mid \bm{x}, \data)][\big]{
+      \Entropy{\btheta}{y, \bm{x}, \data}}
+   \label{eq:greedy-entropy-decrease}
+\end{equation}
+
+\cite{Houlsby2011BayesianAL} points out that while some works use this
+objective directly, this is not feasible for non-trivial models. The authors
+further claim that Eqn. (\ref{eq:greedy-entropy-decrease}), maximizing the
+decrease in entropy of the model given some $\bm{x}$, is equivalent to the
+conditional mutual information between predictions and the model parameters.
+That is how much information about the model parameters we gain from $y$.
+
+Recall one of the alternate forms we can derive from the definition of the
+\textit{Mutual Information}:
+
+\begin{align*}
+   \mathbb{I}\sbr*{X, Y}
+      & = \Expected[x, y \sim p(x, y)]*{\log \frac{p(x, y)}{p(x) p(y)}} \\
+      & = \Expected[x, y \sim p(x, y)]*{\log \frac{p(x, y)}{p(x)}} - 
+         \Expected[x, y \sim p(x, y)][\big]{\log p(y)} \\
+      & = \Expected[x \sim p(x)]*{\Expected[y \sim p(y)][\big]{\log p(y)}} - 
+         \sum_{y} \left( \sum_{x} p(x,y) \right) \log p(y) \\
+      & = \Expected[x \sim p(x)][\big]{\Entropy{Y}{X = x}} -
+         \Expected[y \sim p(y)][\big]{\log p(y)} \\
+      & = -\Entropy{Y}{X} + \mathbb{H}\sbr*{Y} \\
+      & = \mathbb{H}\sbr*{Y} - \Entropy{Y}{X}.
+\end{align*}
+
+\clearpage
+Similarly we can arrive at the following objective based on the conditional
+mutual information between $\mathbb{I}\left[ \btheta, y \mid \bm{x},
+\data \right]$:
+
+\begin{equation}
+   \argmax{\bm{x}}{\Entropy{y}{\bm{x}, \data} -
+      \Expected[\btheta \sim p(\btheta \mid \data)][\big]{
+         \Entropy{y}{\bm{x}, \btheta}}}
+\end{equation}
+
+Using this objective in our value-based RL setting, we need to replace:
+
+\begin{align*}
+   p(y \mid \bm{x}, \data)
+      & = p \big( Q(s, a \mid \data) \big) \\
+      & = \int p\big( Q(s, a \mid \btheta) \big) \, p(\btheta \mid \data) \, d\btheta
+\end{align*}
+
+Following \cite{Gal2017DeepBA} derivation for the classification setting we 
+arrive at the following objective:
+
+\begin{equation}
+\begin{split}
+   \mathbb{I}\left[ Q(s,a), \btheta \right] = 
+      & - \int_{\text{Dom}(Q_{s,a})} p \big( Q(s, a \mid \data) \big) 
+         \log p \big( Q(s, a \mid \data) \big) \;dQ_{s,a}\\
+      & + \Expected[\btheta \sim p(\btheta | \data)]*{
+            \int_{\text{Dom}(Q_{s,a})} p \big( Q(s, a \mid \btheta) \big) 
+            \log p \big( Q(s, a \mid \btheta) \big) \;dQ_{s,a}}
+\end{split}
+\end{equation}
+
+I'm not sure how intelligible is this last equation so this is how I understand
+it. The first term is the entropy of the $Q(s,a)$ estimate when sampling from 
+the posterior. We will call this the Monte-Carlo estimate: 
+
+\begin{equation}
+   Q^{MC}(s,a) = \frac{1}{T} \sum_{t}{Q(s, a \mid \btheta_t)}
+   \label{eq:Q-mc}
+\end{equation}
+
+The second problem in computing this entropy is $p(Q(s,a))$. What do we mean
+by the probability of the state-action value function? This implies keeping a
+distribution over the returns. Since a Gaussian assumption is not really
+good for this, I believe we can use a distributional algorithm. This way we 
+can compute the entropy of the $Q(s,a)$ distribution, when $Q(s,a)$ is actually
+a Monte-Carlo estimate $Q^{MC}(s,a)$.
+
+The second term is simply an expected value of the entropy of $Q(s,a)$ given
+samples from the posterior.
+
+\bigskip
+I don't know exactly how to simplify this. To sum-up, we implement a Bayesian
+Categorical-DQN and compute the values above, yay.
+
+
+
+\subsection{Other prioritization keys}
+
+\cite{Gal2017DeepBA} reviews some other prioritization measures I will mention
+here. The notation is based on a classification task because I am lazy.
+
+\begin{itemize}
+   \item \textit{Max Entropy} -- the example with the largest predictive 
+   entropy is picked. In MLE this is the entropy of the softmax distribution.
+   \item Maximise the \textit{Variation Ratios} $1 - \max_{y} p(y \mid x, \data)$
+   \item Maximize the mean standard deviation. This resembles the prioritization
+   measure we used so far.
+\end{itemize}
+
+
+
+
+% bib stuff
+\clearpage
+\nocite{*}
+\printbibliography
+\addtocontents{toc}{\protect\vspace{\beforebibskip}}
+\addcontentsline{toc}{section}{\refname}
+\end{document}
